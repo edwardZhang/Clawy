@@ -352,6 +352,25 @@ interface RuntimeContentProps {
   onStatusChange: (canProceed: boolean) => void;
 }
 
+function formatRuntimeSource(source?: 'path' | 'managed' | 'bundled' | 'nodeModules') {
+  switch (source) {
+    case 'path':
+      return 'system Node.js';
+    case 'managed':
+      return 'managed runtime';
+    case 'nodeModules':
+      return 'workspace package';
+    case 'bundled':
+      return 'bundled runtime';
+    default:
+      return 'runtime';
+  }
+}
+
+function firstDiagnosticDetail(diagnostics?: Array<{ detail?: string }>) {
+  return diagnostics?.find((diagnostic) => diagnostic.detail)?.detail;
+}
+
 function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const { t } = useTranslation('setup');
   const gatewayStatus = useGatewayStore((state) => state.status);
@@ -413,52 +432,63 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       gateway: { status: 'checking', message: '' },
     });
 
-    // Check Node.js — bundled with the desktop runtime
-    setChecks((prev) => ({
-      ...prev,
-      nodejs: { status: 'success', message: t('runtime.status.success') },
-    }));
-
-    // Check OpenClaw package status
     try {
-      const openclawStatus = await desktopApi.ipcRenderer.invoke('openclaw:status') as {
-        packageExists: boolean;
-        isBuilt: boolean;
-        dir: string;
-        version?: string;
+      const runtimeStatus = await desktopApi.ipcRenderer.invoke('runtime:status') as {
+        node: {
+          path?: string;
+          source?: 'path' | 'managed' | 'bundled';
+          version?: string;
+          diagnostics?: Array<{ detail?: string }>;
+        };
+        openclaw: {
+          dir?: string;
+          source?: 'managed' | 'nodeModules' | 'bundled';
+          version?: string;
+          diagnostics?: Array<{ detail?: string }>;
+        };
       };
 
-      setOpenclawDir(openclawStatus.dir);
+      setOpenclawDir(runtimeStatus.openclaw.dir || '');
 
-      if (!openclawStatus.packageExists) {
+      if (runtimeStatus.node.path) {
         setChecks((prev) => ({
           ...prev,
-          openclaw: {
-            status: 'error',
-            message: `OpenClaw package not found at: ${openclawStatus.dir}`
-          },
-        }));
-      } else if (!openclawStatus.isBuilt) {
-        setChecks((prev) => ({
-          ...prev,
-          openclaw: {
-            status: 'error',
-            message: 'OpenClaw package found but dist is missing'
+          nodejs: {
+            status: 'success',
+            message: `Node.js ready via ${formatRuntimeSource(runtimeStatus.node.source)}${runtimeStatus.node.version ? ` v${runtimeStatus.node.version}` : ''}`,
           },
         }));
       } else {
-        const versionLabel = openclawStatus.version ? ` v${openclawStatus.version}` : '';
+        setChecks((prev) => ({
+          ...prev,
+          nodejs: {
+            status: 'error',
+            message: firstDiagnosticDetail(runtimeStatus.node.diagnostics) || 'No compatible Node.js runtime available',
+          },
+        }));
+      }
+
+      if (runtimeStatus.openclaw.dir) {
         setChecks((prev) => ({
           ...prev,
           openclaw: {
             status: 'success',
-            message: `OpenClaw package ready${versionLabel}`
+            message: `OpenClaw ready via ${formatRuntimeSource(runtimeStatus.openclaw.source)}${runtimeStatus.openclaw.version ? ` v${runtimeStatus.openclaw.version}` : ''}`,
+          },
+        }));
+      } else {
+        setChecks((prev) => ({
+          ...prev,
+          openclaw: {
+            status: 'error',
+            message: firstDiagnosticDetail(runtimeStatus.openclaw.diagnostics) || 'No compatible OpenClaw runtime available',
           },
         }));
       }
     } catch (error) {
       setChecks((prev) => ({
         ...prev,
+        nodejs: { status: 'error', message: `Check failed: ${error}` },
         openclaw: { status: 'error', message: `Check failed: ${error}` },
       }));
     }
@@ -466,7 +496,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     // Check Gateway — read directly from store to avoid stale closure
     // Don't immediately report error; gateway may still be initializing
     await evaluateGatewayAvailability();
-  }, [evaluateGatewayAvailability, t]);
+  }, [evaluateGatewayAvailability]);
 
   useEffect(() => {
     runChecks();
