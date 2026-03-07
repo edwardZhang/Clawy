@@ -28,6 +28,7 @@ const VISION_MIME_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/bmp", "i
 const SUPPORTED_NODE_VERSION_RANGE: &str = ">=24.8.0, <25.0.0";
 const NODE_SMOKE_TEST_SCRIPT: &str = "process.stdout.write('clawy-node-smoke')";
 const NODE_SMOKE_TEST_OUTPUT: &str = "clawy-node-smoke";
+const FULL_MODE_RUNTIME_FLAG: &str = "CLAWY_FULL_MODE_RUNTIME";
 #[allow(dead_code)]
 const MANAGED_RUNTIME_SCHEMA_VERSION: u32 = 1;
 #[allow(dead_code)]
@@ -362,6 +363,24 @@ impl NodeBinarySource {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum OpenClawRuntimeSource {
+    Managed,
+    NodeModules,
+    Bundled,
+}
+
+impl OpenClawRuntimeSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Managed => "managed",
+            Self::NodeModules => "nodeModules",
+            Self::Bundled => "bundled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ManagedNodeInstallPayload {
@@ -547,6 +566,172 @@ struct NodeBinaryResolution {
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
     diagnostics: Vec<NodeBinaryDiagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum OpenClawRuntimeDiagnosticStatus {
+    Accepted,
+    Rejected,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum OpenClawRuntimeDiagnosticReason {
+    NotFound,
+    PathDoesNotExist,
+    MissingPackageJson,
+    InvalidPackageMetadata,
+    MissingEntryScript,
+    MissingDistEntry,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawRuntimeDiagnostic {
+    source: OpenClawRuntimeSource,
+    path: Option<PathBuf>,
+    status: OpenClawRuntimeDiagnosticStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<OpenClawRuntimeDiagnosticReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+}
+
+impl OpenClawRuntimeDiagnostic {
+    fn accepted(source: OpenClawRuntimeSource, path: PathBuf, version: String) -> Self {
+        Self {
+            source,
+            path: Some(path),
+            status: OpenClawRuntimeDiagnosticStatus::Accepted,
+            reason: None,
+            detail: None,
+            version: Some(version),
+        }
+    }
+
+    fn rejected(
+        source: OpenClawRuntimeSource,
+        path: Option<PathBuf>,
+        reason: OpenClawRuntimeDiagnosticReason,
+        detail: impl Into<String>,
+        version: Option<String>,
+    ) -> Self {
+        Self {
+            source,
+            path,
+            status: OpenClawRuntimeDiagnosticStatus::Rejected,
+            reason: Some(reason),
+            detail: Some(detail.into()),
+            version,
+        }
+    }
+
+    fn missing(
+        source: OpenClawRuntimeSource,
+        reason: OpenClawRuntimeDiagnosticReason,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            path: None,
+            status: OpenClawRuntimeDiagnosticStatus::Missing,
+            reason: Some(reason),
+            detail: Some(detail.into()),
+            version: None,
+        }
+    }
+
+    fn is_accepted(&self) -> bool {
+        self.status == OpenClawRuntimeDiagnosticStatus::Accepted
+    }
+
+    fn summary(&self) -> String {
+        let location = self
+            .path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<unresolved>".into());
+
+        match self.status {
+            OpenClawRuntimeDiagnosticStatus::Accepted => format!(
+                "{} OpenClaw accepted at {} ({})",
+                self.source.as_str(),
+                location,
+                self.version.as_deref().unwrap_or("unknown version")
+            ),
+            OpenClawRuntimeDiagnosticStatus::Rejected
+            | OpenClawRuntimeDiagnosticStatus::Missing => {
+                let reason = self
+                    .reason
+                    .map(|reason| format!("{reason:?}"))
+                    .unwrap_or_else(|| "unknown".into());
+                let detail = self.detail.as_deref().unwrap_or("no details available");
+                format!(
+                    "{} OpenClaw rejected at {} ({}: {})",
+                    self.source.as_str(),
+                    location,
+                    reason,
+                    detail
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawRuntimeResolution {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dir: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entry_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<OpenClawRuntimeSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    diagnostics: Vec<OpenClawRuntimeDiagnostic>,
+}
+
+impl OpenClawRuntimeResolution {
+    fn accepted(
+        diagnostics: Vec<OpenClawRuntimeDiagnostic>,
+        accepted: &OpenClawRuntimeDiagnostic,
+    ) -> Self {
+        let dir = accepted.path.clone();
+        let entry_path = dir.as_ref().map(|path| path.join("openclaw.mjs"));
+        Self {
+            dir,
+            entry_path,
+            source: Some(accepted.source),
+            version: accepted.version.clone(),
+            diagnostics,
+        }
+    }
+
+    fn failure_message(&self) -> String {
+        if self.diagnostics.is_empty() {
+            return "No OpenClaw runtime candidates were probed".into();
+        }
+
+        self.diagnostics
+            .iter()
+            .map(OpenClawRuntimeDiagnostic::summary)
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeStatusPayload {
+    mode: String,
+    full_mode_runtime: bool,
+    node: NodeBinaryResolution,
+    openclaw: OpenClawRuntimeResolution,
 }
 
 impl NodeBinaryResolution {
@@ -2158,60 +2343,231 @@ fn packaged_resource_path(relative: &Path) -> Option<PathBuf> {
     None
 }
 
-fn get_openclaw_dir() -> PathBuf {
-    if let Some(path) = managed_openclaw_dir() {
+fn env_flag_enabled(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn full_mode_runtime_enabled() -> bool {
+    option_env!("CLAWY_FULL_MODE_RUNTIME")
+        .map(env_flag_enabled)
+        .unwrap_or(false)
+        || std::env::var(FULL_MODE_RUNTIME_FLAG)
+            .map(|value| env_flag_enabled(&value))
+            .unwrap_or(false)
+}
+
+fn openclaw_dist_entry_exists(root: &Path) -> bool {
+    root.join("dist").join("entry.js").exists() || root.join("dist").join("entry.mjs").exists()
+}
+
+fn workspace_openclaw_dir() -> PathBuf {
+    current_workspace_dir()
+        .join("node_modules")
+        .join("openclaw")
+}
+
+fn bundled_openclaw_dir() -> PathBuf {
+    if let Some(path) = packaged_resource_path(Path::new("openclaw")) {
         return path;
     }
 
-    let cwd = current_workspace_dir();
-    if let Some(path) = packaged_resource_path(Path::new("openclaw")) {
-        if path.join("package.json").exists() {
-            return path;
+    current_workspace_dir().join("build").join("openclaw")
+}
+
+fn inspect_openclaw_runtime_candidate(
+    source: OpenClawRuntimeSource,
+    dir: Option<PathBuf>,
+) -> OpenClawRuntimeDiagnostic {
+    let Some(dir) = dir else {
+        let detail = match source {
+            OpenClawRuntimeSource::Managed => "No managed OpenClaw runtime is active".to_string(),
+            OpenClawRuntimeSource::NodeModules => format!(
+                "No OpenClaw package found under {}",
+                workspace_openclaw_dir().to_string_lossy()
+            ),
+            OpenClawRuntimeSource::Bundled => format!(
+                "No bundled OpenClaw runtime found under {}",
+                bundled_openclaw_dir().to_string_lossy()
+            ),
+        };
+        return OpenClawRuntimeDiagnostic::missing(
+            source,
+            OpenClawRuntimeDiagnosticReason::NotFound,
+            detail,
+        );
+    };
+
+    if !dir.exists() {
+        return OpenClawRuntimeDiagnostic::rejected(
+            source,
+            Some(dir.clone()),
+            OpenClawRuntimeDiagnosticReason::PathDoesNotExist,
+            format!(
+                "OpenClaw runtime path does not exist: {}",
+                dir.to_string_lossy()
+            ),
+            None,
+        );
+    }
+
+    let package_path = dir.join("package.json");
+    if !package_path.exists() {
+        return OpenClawRuntimeDiagnostic::rejected(
+            source,
+            Some(dir.clone()),
+            OpenClawRuntimeDiagnosticReason::MissingPackageJson,
+            format!(
+                "OpenClaw package metadata is missing at {}",
+                package_path.to_string_lossy()
+            ),
+            None,
+        );
+    }
+
+    let package = match read_openclaw_package_metadata(&dir) {
+        Ok(package) => package,
+        Err(err) => {
+            return OpenClawRuntimeDiagnostic::rejected(
+                source,
+                Some(dir),
+                OpenClawRuntimeDiagnosticReason::InvalidPackageMetadata,
+                err,
+                None,
+            );
+        }
+    };
+
+    if package.name != OPENCLAW_PACKAGE_NAME {
+        return OpenClawRuntimeDiagnostic::rejected(
+            source,
+            Some(dir.clone()),
+            OpenClawRuntimeDiagnosticReason::InvalidPackageMetadata,
+            format!(
+                "Resolved `{}` instead of `{OPENCLAW_PACKAGE_NAME}` at {}",
+                package.name,
+                dir.to_string_lossy()
+            ),
+            Some(package.version),
+        );
+    }
+
+    let entry_path = dir.join("openclaw.mjs");
+    if !entry_path.exists() {
+        return OpenClawRuntimeDiagnostic::rejected(
+            source,
+            Some(dir.clone()),
+            OpenClawRuntimeDiagnosticReason::MissingEntryScript,
+            format!(
+                "OpenClaw entry script not found at {}",
+                entry_path.to_string_lossy()
+            ),
+            Some(package.version),
+        );
+    }
+
+    if !openclaw_dist_entry_exists(&dir) {
+        return OpenClawRuntimeDiagnostic::rejected(
+            source,
+            Some(dir.clone()),
+            OpenClawRuntimeDiagnosticReason::MissingDistEntry,
+            format!(
+                "OpenClaw dist entry not found under {}",
+                dir.join("dist").to_string_lossy()
+            ),
+            Some(package.version),
+        );
+    }
+
+    OpenClawRuntimeDiagnostic::accepted(source, dir, package.version)
+}
+
+fn resolve_openclaw_runtime_with_candidates(
+    managed_dir: Option<PathBuf>,
+    workspace_dir: PathBuf,
+    bundled_dir: PathBuf,
+    prefer_bundled: bool,
+) -> OpenClawRuntimeResolution {
+    let mut diagnostics = Vec::new();
+
+    let candidate_order = if prefer_bundled {
+        vec![
+            (OpenClawRuntimeSource::Bundled, Some(bundled_dir)),
+            (OpenClawRuntimeSource::Managed, managed_dir),
+            (OpenClawRuntimeSource::NodeModules, Some(workspace_dir)),
+        ]
+    } else {
+        vec![
+            (OpenClawRuntimeSource::Managed, managed_dir),
+            (OpenClawRuntimeSource::NodeModules, Some(workspace_dir)),
+            (OpenClawRuntimeSource::Bundled, Some(bundled_dir)),
+        ]
+    };
+
+    for (source, path) in candidate_order {
+        let diagnostic = inspect_openclaw_runtime_candidate(source, path);
+        diagnostics.push(diagnostic.clone());
+        if diagnostic.is_accepted() {
+            return OpenClawRuntimeResolution::accepted(diagnostics, &diagnostic);
         }
     }
 
-    let bundled_dir = cwd.join("build").join("openclaw");
-    if bundled_dir.join("package.json").exists() {
-        return bundled_dir;
+    OpenClawRuntimeResolution {
+        diagnostics,
+        ..OpenClawRuntimeResolution::default()
     }
-
-    let node_modules_dir = cwd.join("node_modules").join("openclaw");
-    if node_modules_dir.join("package.json").exists() {
-        return node_modules_dir;
-    }
-
-    cwd.join("node_modules").join("openclaw")
 }
 
-fn get_openclaw_entry_path() -> PathBuf {
-    get_openclaw_dir().join("openclaw.mjs")
+fn resolve_openclaw_runtime() -> OpenClawRuntimeResolution {
+    resolve_openclaw_runtime_with_candidates(
+        managed_openclaw_dir(),
+        workspace_openclaw_dir(),
+        bundled_openclaw_dir(),
+        full_mode_runtime_enabled(),
+    )
+}
+
+fn runtime_status_payload() -> RuntimeStatusPayload {
+    RuntimeStatusPayload {
+        mode: if full_mode_runtime_enabled() {
+            "full".into()
+        } else {
+            "resolver".into()
+        },
+        full_mode_runtime: full_mode_runtime_enabled(),
+        node: resolve_node_binary(),
+        openclaw: resolve_openclaw_runtime(),
+    }
+}
+
+fn get_openclaw_dir() -> PathBuf {
+    resolve_openclaw_runtime()
+        .dir
+        .unwrap_or_else(workspace_openclaw_dir)
 }
 
 fn openclaw_status() -> Value {
-    let dir = get_openclaw_dir();
-    let entry_path = get_openclaw_entry_path();
+    let OpenClawRuntimeResolution {
+        dir,
+        entry_path,
+        source,
+        version,
+        diagnostics,
+    } = resolve_openclaw_runtime();
+    let dir = dir.unwrap_or_else(workspace_openclaw_dir);
+    let entry_path = entry_path.unwrap_or_else(|| dir.join("openclaw.mjs"));
     let package_path = dir.join("package.json");
-    let source = if managed_openclaw_dir()
-        .as_ref()
-        .map(|managed_dir| managed_dir == &dir)
-        .unwrap_or(false)
-    {
-        "managed"
-    } else {
-        "bundled"
-    };
-    let version = fs::read_to_string(&package_path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        .and_then(|pkg| pkg.get("version").cloned());
 
     json!({
         "packageExists": package_path.exists(),
-        "isBuilt": dir.join("dist").exists(),
+        "isBuilt": openclaw_dist_entry_exists(&dir),
         "entryPath": entry_path,
         "dir": dir,
-        "source": source,
+        "source": source.map(OpenClawRuntimeSource::as_str),
         "version": version,
+        "diagnostics": diagnostics,
     })
 }
 
@@ -2987,15 +3343,24 @@ fn update_skill_config_value(params: &Value) -> Result<Value, String> {
 }
 
 fn openclaw_command() -> Result<Command, String> {
-    let entry = get_openclaw_entry_path();
-    if !entry.exists() {
+    let node_resolution = resolve_node_binary();
+    let Some(node_binary) = node_resolution.path.clone() else {
         return Err(format!(
-            "OpenClaw entry script not found at {}",
-            entry.to_string_lossy()
+            "No compatible Node.js runtime available: {}",
+            node_resolution.failure_message()
         ));
-    }
+    };
 
-    let mut command = node_command()?;
+    let openclaw_resolution = resolve_openclaw_runtime();
+    let Some(entry) = openclaw_resolution.entry_path.clone() else {
+        return Err(format!(
+            "No compatible OpenClaw runtime available: {}",
+            openclaw_resolution.failure_message()
+        ));
+    };
+
+    let mut command = Command::new(node_binary);
+    apply_proxy_env(&mut command, &load_settings());
     command.arg(entry);
     Ok(command)
 }
@@ -4694,23 +5059,40 @@ fn inspect_node_binary_candidate(
     NodeBinaryDiagnostic::accepted(source, path, version)
 }
 
+#[cfg(test)]
 fn resolve_node_binary_with_candidates(
     system_path: Option<PathBuf>,
     bundled_path: PathBuf,
 ) -> NodeBinaryResolution {
+    resolve_node_binary_with_candidates_and_preference(system_path, bundled_path, false)
+}
+
+#[cfg(test)]
+fn resolve_node_binary_with_candidates_and_preference(
+    system_path: Option<PathBuf>,
+    bundled_path: PathBuf,
+    prefer_bundled: bool,
+) -> NodeBinaryResolution {
     let mut diagnostics = Vec::new();
 
-    let system_diagnostic = inspect_node_binary_candidate(NodeBinarySource::Path, system_path);
-    diagnostics.push(system_diagnostic.clone());
-    if system_diagnostic.is_accepted() {
-        return NodeBinaryResolution::accepted(diagnostics, &system_diagnostic);
-    }
+    let candidate_order = if prefer_bundled {
+        vec![
+            (NodeBinarySource::Bundled, Some(bundled_path)),
+            (NodeBinarySource::Path, system_path),
+        ]
+    } else {
+        vec![
+            (NodeBinarySource::Path, system_path),
+            (NodeBinarySource::Bundled, Some(bundled_path)),
+        ]
+    };
 
-    let bundled_diagnostic =
-        inspect_node_binary_candidate(NodeBinarySource::Bundled, Some(bundled_path));
-    diagnostics.push(bundled_diagnostic.clone());
-    if bundled_diagnostic.is_accepted() {
-        return NodeBinaryResolution::accepted(diagnostics, &bundled_diagnostic);
+    for (source, path) in candidate_order {
+        let diagnostic = inspect_node_binary_candidate(source, path);
+        diagnostics.push(diagnostic.clone());
+        if diagnostic.is_accepted() {
+            return NodeBinaryResolution::accepted(diagnostics, &diagnostic);
+        }
     }
 
     NodeBinaryResolution {
@@ -4719,30 +5101,48 @@ fn resolve_node_binary_with_candidates(
     }
 }
 
+#[cfg(test)]
 fn resolve_node_binary_with_candidates_and_managed(
     system_path: Option<PathBuf>,
     managed_path: Option<PathBuf>,
     bundled_path: PathBuf,
 ) -> NodeBinaryResolution {
+    resolve_node_binary_with_candidates_and_managed_and_preference(
+        system_path,
+        managed_path,
+        bundled_path,
+        false,
+    )
+}
+
+fn resolve_node_binary_with_candidates_and_managed_and_preference(
+    system_path: Option<PathBuf>,
+    managed_path: Option<PathBuf>,
+    bundled_path: PathBuf,
+    prefer_bundled: bool,
+) -> NodeBinaryResolution {
     let mut diagnostics = Vec::new();
 
-    let system_diagnostic = inspect_node_binary_candidate(NodeBinarySource::Path, system_path);
-    diagnostics.push(system_diagnostic.clone());
-    if system_diagnostic.is_accepted() {
-        return NodeBinaryResolution::accepted(diagnostics, &system_diagnostic);
-    }
+    let candidate_order = if prefer_bundled {
+        vec![
+            (NodeBinarySource::Bundled, Some(bundled_path)),
+            (NodeBinarySource::Path, system_path),
+            (NodeBinarySource::Managed, managed_path),
+        ]
+    } else {
+        vec![
+            (NodeBinarySource::Path, system_path),
+            (NodeBinarySource::Managed, managed_path),
+            (NodeBinarySource::Bundled, Some(bundled_path)),
+        ]
+    };
 
-    let managed_diagnostic = inspect_node_binary_candidate(NodeBinarySource::Managed, managed_path);
-    diagnostics.push(managed_diagnostic.clone());
-    if managed_diagnostic.is_accepted() {
-        return NodeBinaryResolution::accepted(diagnostics, &managed_diagnostic);
-    }
-
-    let bundled_diagnostic =
-        inspect_node_binary_candidate(NodeBinarySource::Bundled, Some(bundled_path));
-    diagnostics.push(bundled_diagnostic.clone());
-    if bundled_diagnostic.is_accepted() {
-        return NodeBinaryResolution::accepted(diagnostics, &bundled_diagnostic);
+    for (source, path) in candidate_order {
+        let diagnostic = inspect_node_binary_candidate(source, path);
+        diagnostics.push(diagnostic.clone());
+        if diagnostic.is_accepted() {
+            return NodeBinaryResolution::accepted(diagnostics, &diagnostic);
+        }
     }
 
     NodeBinaryResolution {
@@ -4752,10 +5152,11 @@ fn resolve_node_binary_with_candidates_and_managed(
 }
 
 fn resolve_node_binary() -> NodeBinaryResolution {
-    resolve_node_binary_with_candidates_and_managed(
+    resolve_node_binary_with_candidates_and_managed_and_preference(
         find_command_path("node"),
         managed_node_binary_path(),
         bundled_node_path(),
+        full_mode_runtime_enabled(),
     )
 }
 
@@ -6124,15 +6525,24 @@ fn force_stop_gateway_listener(port: u16) -> Vec<u32> {
 }
 
 fn gateway_command() -> Result<Command, String> {
-    let openclaw_entry = get_openclaw_entry_path();
-    if !openclaw_entry.exists() {
+    let node_resolution = resolve_node_binary();
+    let Some(node_binary) = node_resolution.path.clone() else {
         return Err(format!(
-            "OpenClaw entry script not found at {}",
-            openclaw_entry.to_string_lossy()
+            "No compatible Node.js runtime available: {}",
+            node_resolution.failure_message()
         ));
-    }
+    };
 
-    let mut command = node_command()?;
+    let openclaw_resolution = resolve_openclaw_runtime();
+    let Some(openclaw_entry) = openclaw_resolution.entry_path.clone() else {
+        return Err(format!(
+            "No compatible OpenClaw runtime available: {}",
+            openclaw_resolution.failure_message()
+        ));
+    };
+
+    let mut command = Command::new(node_binary);
+    apply_proxy_env(&mut command, &load_settings());
     command.arg(openclaw_entry);
     Ok(command)
 }
@@ -6200,6 +6610,25 @@ fn gateway_start_internal(app: &AppHandle, state: &BridgeState) -> Result<Value,
         status.uptime = None;
         status.version = None;
     })?;
+
+    let runtime_status = runtime_status_payload();
+    append_log_line(
+        "INFO",
+        &format!(
+            "Launching Gateway with node={} openclaw={} mode={}",
+            runtime_status
+                .node
+                .source
+                .map(NodeBinarySource::as_str)
+                .unwrap_or("unresolved"),
+            runtime_status
+                .openclaw
+                .source
+                .map(OpenClawRuntimeSource::as_str)
+                .unwrap_or("unresolved"),
+            runtime_status.mode
+        ),
+    );
 
     let mut command = gateway_command()?;
     command
@@ -6920,7 +7349,7 @@ fn invoke_ipc(
         }
 
         "openclaw:status" => Ok(openclaw_status()),
-        "openclaw:isReady" => Ok(json!(get_openclaw_dir().join("package.json").exists())),
+        "openclaw:isReady" => Ok(json!(resolve_openclaw_runtime().dir.is_some())),
         "openclaw:getDir" => Ok(json!(get_openclaw_dir())),
         "openclaw:getConfigDir" => Ok(json!(openclaw_config_dir())),
         "openclaw:getSkillsDir" => {
@@ -6928,19 +7357,40 @@ fn invoke_ipc(
             Ok(json!(openclaw_skills_dir()))
         }
         "openclaw:getCliCommand" => {
-            let entry_path = get_openclaw_entry_path();
-            if entry_path.exists() {
+            let node_resolution = resolve_node_binary();
+            let openclaw_resolution = resolve_openclaw_runtime();
+            if let (Some(node_path), Some(entry_path)) = (
+                node_resolution.path.as_ref(),
+                openclaw_resolution.entry_path.as_ref(),
+            ) {
                 Ok(json!({
                     "success": true,
-                    "command": format!("node {}", entry_path.to_string_lossy())
+                    "command": format!("\"{}\" \"{}\"", node_path.to_string_lossy(), entry_path.to_string_lossy()),
+                    "nodeSource": node_resolution.source.map(NodeBinarySource::as_str),
+                    "openclawSource": openclaw_resolution.source.map(OpenClawRuntimeSource::as_str),
                 }))
             } else {
+                let node_error = if node_resolution.path.is_none() {
+                    Some(node_resolution.failure_message())
+                } else {
+                    None
+                };
+                let openclaw_error = if openclaw_resolution.entry_path.is_none() {
+                    Some(openclaw_resolution.failure_message())
+                } else {
+                    None
+                };
                 Ok(json!({
                     "success": false,
-                    "error": format!("OpenClaw entry script not found at {}", entry_path.to_string_lossy())
+                    "error": node_error
+                        .into_iter()
+                        .chain(openclaw_error.into_iter())
+                        .collect::<Vec<_>>()
+                        .join("; ")
                 }))
             }
         }
+        "runtime:status" => Ok(json!(runtime_status_payload())),
 
         "runtime:installManagedNode" => {
             let payload = serde_json::from_value::<ManagedNodeInstallPayload>(
@@ -7777,6 +8227,38 @@ mod tests {
         )
     }
 
+    fn create_fake_openclaw_runtime_dir(
+        base_dir: &Path,
+        name: &str,
+        version: &str,
+        include_entry: bool,
+    ) -> PathBuf {
+        let runtime_dir = base_dir.join(name);
+        fs::create_dir_all(runtime_dir.join("dist")).expect("create fake openclaw dist dir");
+        fs::write(
+            runtime_dir.join("package.json"),
+            serde_json::to_string_pretty(&json!({
+                "name": OPENCLAW_PACKAGE_NAME,
+                "version": version,
+            }))
+            .expect("serialize fake openclaw package"),
+        )
+        .expect("write fake openclaw package json");
+        if include_entry {
+            fs::write(
+                runtime_dir.join("openclaw.mjs"),
+                "#!/usr/bin/env node\nimport './dist/entry.mjs';\n",
+            )
+            .expect("write fake openclaw entry");
+        }
+        fs::write(
+            runtime_dir.join("dist").join("entry.mjs"),
+            "export const ok = true;\n",
+        )
+        .expect("write fake openclaw dist entry");
+        runtime_dir
+    }
+
     fn serve_http_bytes_once(file_name: &str, bytes: Vec<u8>) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let port = listener.local_addr().expect("server addr").port();
@@ -8399,5 +8881,87 @@ mod tests {
             Some(missing_bundled.as_path())
         );
         assert!(resolution.failure_message().contains("NotFoundInPath"));
+    }
+
+    #[test]
+    fn node_binary_resolution_prefers_bundled_when_full_mode_enabled() {
+        let test_dir = TestDir::new("node-resolution-full-mode");
+        let system_node = create_fake_node_binary(test_dir.path(), "system-node", "24.8.0", true);
+        let bundled_node = create_fake_node_binary(test_dir.path(), "bundled-node", "24.8.1", true);
+
+        let resolution = resolve_node_binary_with_candidates_and_preference(
+            Some(system_node),
+            bundled_node.clone(),
+            true,
+        );
+
+        assert_eq!(resolution.path, Some(bundled_node));
+        assert_eq!(resolution.source, Some(NodeBinarySource::Bundled));
+        assert_eq!(resolution.version.as_deref(), Some("24.8.1"));
+        assert_eq!(resolution.diagnostics.len(), 1);
+        assert_eq!(
+            resolution.diagnostics[0].status,
+            NodeBinaryDiagnosticStatus::Accepted
+        );
+    }
+
+    #[test]
+    fn openclaw_runtime_resolution_prefers_managed_before_workspace_and_bundled() {
+        let test_dir = TestDir::new("openclaw-resolution-managed");
+        let managed_dir =
+            create_fake_openclaw_runtime_dir(test_dir.path(), "managed-openclaw", "2026.3.2", true);
+        let workspace_dir = create_fake_openclaw_runtime_dir(
+            test_dir.path(),
+            "workspace-openclaw",
+            "2026.3.1",
+            true,
+        );
+        let bundled_dir =
+            create_fake_openclaw_runtime_dir(test_dir.path(), "bundled-openclaw", "2026.3.0", true);
+
+        let resolution = resolve_openclaw_runtime_with_candidates(
+            Some(managed_dir.clone()),
+            workspace_dir,
+            bundled_dir,
+            false,
+        );
+
+        assert_eq!(resolution.dir, Some(managed_dir));
+        assert_eq!(resolution.source, Some(OpenClawRuntimeSource::Managed));
+        assert_eq!(resolution.version.as_deref(), Some("2026.3.2"));
+        assert_eq!(resolution.diagnostics.len(), 1);
+        assert!(matches!(
+            resolution.diagnostics[0].status,
+            OpenClawRuntimeDiagnosticStatus::Accepted
+        ));
+    }
+
+    #[test]
+    fn openclaw_runtime_resolution_prefers_bundled_when_full_mode_enabled() {
+        let test_dir = TestDir::new("openclaw-resolution-full-mode");
+        let workspace_dir = create_fake_openclaw_runtime_dir(
+            test_dir.path(),
+            "workspace-openclaw",
+            "2026.3.1",
+            true,
+        );
+        let bundled_dir =
+            create_fake_openclaw_runtime_dir(test_dir.path(), "bundled-openclaw", "2026.3.2", true);
+
+        let resolution = resolve_openclaw_runtime_with_candidates(
+            None,
+            workspace_dir,
+            bundled_dir.clone(),
+            true,
+        );
+
+        assert_eq!(resolution.dir, Some(bundled_dir));
+        assert_eq!(resolution.source, Some(OpenClawRuntimeSource::Bundled));
+        assert_eq!(resolution.version.as_deref(), Some("2026.3.2"));
+        assert_eq!(resolution.diagnostics.len(), 1);
+        assert!(matches!(
+            resolution.diagnostics[0].status,
+            OpenClawRuntimeDiagnosticStatus::Accepted
+        ));
     }
 }
