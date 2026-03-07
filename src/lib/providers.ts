@@ -1,0 +1,137 @@
+/**
+ * Provider Types & UI Metadata — single source of truth for the frontend.
+ *
+ * NOTE: When adding a new provider type, also update the Rust-side
+ * provider metadata in src-tauri/src/lib.rs.
+ */
+
+export const PROVIDER_TYPES = [
+  'anthropic',
+  'openai',
+  'google',
+  'openrouter',
+  'ark',
+  'moonshot',
+  'siliconflow',
+  'minimax-portal',
+  'minimax-portal-cn',
+  'qwen-portal',
+  'ollama',
+  'custom',
+] as const;
+export type ProviderType = (typeof PROVIDER_TYPES)[number];
+
+export const OLLAMA_PLACEHOLDER_API_KEY = 'ollama-local';
+
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  type: ProviderType;
+  baseUrl?: string;
+  model?: string;
+  fallbackModels?: string[];
+  fallbackProviderIds?: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderWithKeyInfo extends ProviderConfig {
+  hasKey: boolean;
+  keyMasked: string | null;
+}
+
+export interface ProviderTypeInfo {
+  id: ProviderType;
+  name: string;
+  icon: string;
+  placeholder: string;
+  /** Model brand name for display (e.g. "Claude", "GPT") */
+  model?: string;
+  requiresApiKey: boolean;
+  /** Pre-filled base URL (for proxy/compatible providers like SiliconFlow) */
+  defaultBaseUrl?: string;
+  /** Whether the user can edit the base URL in setup */
+  showBaseUrl?: boolean;
+  /** Whether to show a Model ID input field (for providers where user picks the model) */
+  showModelId?: boolean;
+  /** Whether the Model ID input should only be shown in developer mode */
+  showModelIdInDevModeOnly?: boolean;
+  /** Default / example model ID placeholder */
+  modelIdPlaceholder?: string;
+  /** Default model ID to pre-fill */
+  defaultModelId?: string;
+  /** Whether this provider uses OAuth device flow instead of an API key */
+  isOAuth?: boolean;
+  /** Whether this provider also accepts a direct API key (in addition to OAuth) */
+  supportsApiKey?: boolean;
+  /** URL where users can apply for the API Key */
+  apiKeyUrl?: string;
+}
+
+import { providerIcons } from '@/assets/providers';
+
+/** All supported provider types with UI metadata */
+export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
+  { id: 'anthropic', name: 'Anthropic', icon: '🤖', placeholder: 'sk-ant-api03-...', model: 'Claude', requiresApiKey: true },
+  { id: 'openai', name: 'OpenAI', icon: '💚', placeholder: 'sk-proj-...', model: 'GPT', requiresApiKey: true },
+  { id: 'google', name: 'Google', icon: '🔷', placeholder: 'AIza...', model: 'Gemini', requiresApiKey: true },
+  { id: 'openrouter', name: 'OpenRouter', icon: '🌐', placeholder: 'sk-or-v1-...', model: 'Multi-Model', requiresApiKey: true, showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'anthropic/claude-opus-4.6', defaultModelId: 'anthropic/claude-opus-4.6' },
+  { id: 'ark', name: 'ByteDance Ark', icon: 'A', placeholder: 'your-ark-api-key', model: 'Doubao', requiresApiKey: true, defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3', showBaseUrl: true, showModelId: true, modelIdPlaceholder: 'ep-20260228000000-xxxxx' },
+  { id: 'moonshot', name: 'Moonshot (CN)', icon: '🌙', placeholder: 'sk-...', model: 'Kimi', requiresApiKey: true, defaultBaseUrl: 'https://api.moonshot.cn/v1', defaultModelId: 'kimi-k2.5' },
+  { id: 'siliconflow', name: 'SiliconFlow (CN)', icon: '🌊', placeholder: 'sk-...', model: 'Multi-Model', requiresApiKey: true, defaultBaseUrl: 'https://api.siliconflow.cn/v1', showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'deepseek-ai/DeepSeek-V3', defaultModelId: 'deepseek-ai/DeepSeek-V3' },
+  { id: 'minimax-portal', name: 'MiniMax (Global)', icon: '☁️', placeholder: 'sk-...', model: 'MiniMax', requiresApiKey: false, isOAuth: true, supportsApiKey: true, defaultModelId: 'MiniMax-M2.5', apiKeyUrl: 'https://intl.minimaxi.com/' },
+  { id: 'minimax-portal-cn', name: 'MiniMax (CN)', icon: '☁️', placeholder: 'sk-...', model: 'MiniMax', requiresApiKey: false, isOAuth: true, supportsApiKey: true, defaultModelId: 'MiniMax-M2.5', apiKeyUrl: 'https://platform.minimaxi.com/' },
+  { id: 'qwen-portal', name: 'Qwen', icon: '☁️', placeholder: 'sk-...', model: 'Qwen', requiresApiKey: false, isOAuth: true, defaultModelId: 'coder-model' },
+  { id: 'ollama', name: 'Ollama', icon: '🦙', placeholder: 'Not required', requiresApiKey: false, defaultBaseUrl: 'http://localhost:11434/v1', showBaseUrl: true, showModelId: true, modelIdPlaceholder: 'qwen3:latest' },
+  { id: 'custom', name: 'Custom', icon: '⚙️', placeholder: 'API key...', requiresApiKey: true, showBaseUrl: true, showModelId: true, modelIdPlaceholder: 'your-provider/model-id' },
+];
+
+/** Get the SVG logo URL for a provider type, falls back to undefined */
+export function getProviderIconUrl(type: ProviderType | string): string | undefined {
+  return providerIcons[type];
+}
+
+/** Whether a provider's logo needs CSS invert in dark mode (all logos are monochrome) */
+export function shouldInvertInDark(_type: ProviderType | string): boolean {
+  return true;
+}
+
+/** Provider list shown in the Setup wizard */
+export const SETUP_PROVIDERS = PROVIDER_TYPE_INFO;
+
+/** Get type info by provider type id */
+export function getProviderTypeInfo(type: ProviderType): ProviderTypeInfo | undefined {
+  return PROVIDER_TYPE_INFO.find((t) => t.id === type);
+}
+
+export function shouldShowProviderModelId(
+  provider: Pick<ProviderTypeInfo, 'showModelId' | 'showModelIdInDevModeOnly'> | undefined,
+  devModeUnlocked: boolean
+): boolean {
+  if (!provider?.showModelId) return false;
+  if (provider.showModelIdInDevModeOnly && !devModeUnlocked) return false;
+  return true;
+}
+
+export function resolveProviderModelForSave(
+  provider: Pick<ProviderTypeInfo, 'defaultModelId' | 'showModelId' | 'showModelIdInDevModeOnly'> | undefined,
+  modelId: string,
+  devModeUnlocked: boolean
+): string | undefined {
+  if (!shouldShowProviderModelId(provider, devModeUnlocked)) {
+    return undefined;
+  }
+
+  const trimmedModelId = modelId.trim();
+  return trimmedModelId || provider?.defaultModelId || undefined;
+}
+
+/** Normalize provider API key before saving; Ollama uses a local placeholder when blank. */
+export function resolveProviderApiKeyForSave(type: ProviderType | string, apiKey: string): string | undefined {
+  const trimmed = apiKey.trim();
+  if (type === 'ollama') {
+    return trimmed || OLLAMA_PLACEHOLDER_API_KEY;
+  }
+  return trimmed || undefined;
+}

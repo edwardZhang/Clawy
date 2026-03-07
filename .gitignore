@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+dist-electron/
+src-tauri/target/
+release/
+*.local
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+# Cache
+.cache/
+.turbo/
+*.tsbuildinfo
+
+# Desktop bundles
+*.app
+*.dmg
+*.exe
+*.msi
+*.AppImage
+*.deb
+*.rpm
+*.pkg
+*.zip
+
+resources/bin
+temp_uv_extract/
+
+# Secrets
+*.p12
+*.pem
+*.key
+
+build/
+
+.cursor/
+.pnpm-store/
+.git.backup-*/
