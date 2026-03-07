@@ -466,7 +466,25 @@ where
 }
 
 fn load_settings() -> Settings {
-    read_json_or_default(&settings_path())
+    let path = settings_path();
+
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(settings) = serde_json::from_str::<Settings>(&content) {
+            return settings;
+        }
+
+        append_log_line(
+            "WARN",
+            &format!(
+                "Failed to parse settings file at {}; recreating defaults.",
+                path.to_string_lossy()
+            ),
+        );
+    }
+
+    let settings = Settings::default();
+    let _ = write_json(&path, &settings);
+    settings
 }
 
 fn save_settings(settings: &Settings) -> Result<(), String> {

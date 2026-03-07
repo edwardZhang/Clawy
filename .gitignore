@@ -25,6 +25,9 @@ docs/
 .env
 .env.local
 .env.*.local
+.codex-workflow.env
+.codex-workflow.env.local
+.codex-workflow.env.*.local
 
 # Logs
 logs
