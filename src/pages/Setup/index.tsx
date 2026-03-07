@@ -376,6 +376,14 @@ interface RuntimeStatusPayload {
   };
 }
 
+interface RuntimeInstallResponse {
+  success?: boolean;
+  error?: string;
+  result?: {
+    version?: string;
+  };
+}
+
 function formatRuntimeSource(source?: 'path' | 'managed' | 'bundled' | 'nodeModules') {
   switch (source) {
     case 'path':
@@ -555,7 +563,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         type: 'set',
         key: 'gateway',
         patch: {
-          status: 'error',
+          status: 'idle',
           message: t('runtime.status.gatewayStopped'),
         },
       });
@@ -727,6 +735,68 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     };
   }, [gatewayStatus.state, runtimeReady, t]);
 
+  const handleInstallNode = async () => {
+    dispatchChecks({
+      type: 'set',
+      key: 'nodejs',
+      patch: {
+        status: 'checking',
+        message: t('runtime.status.installingNode'),
+      },
+    });
+
+    try {
+      const response = await desktopApi.ipcRenderer.invoke('runtime:installRecommendedNode') as RuntimeInstallResponse;
+      if (response.success === false) {
+        throw new Error(response.error || t('runtime.status.nodeInstallFailed'));
+      }
+
+      toast.success(t('runtime.toast.nodeInstalled', { version: response.result?.version || '' }));
+      await runChecks();
+    } catch (error) {
+      dispatchChecks({
+        type: 'set',
+        key: 'nodejs',
+        patch: {
+          status: 'error',
+          message: error instanceof Error ? error.message : t('runtime.status.nodeInstallFailed'),
+        },
+      });
+    }
+  };
+
+  const handleInstallOpenClaw = async () => {
+    dispatchChecks({
+      type: 'set',
+      key: 'openclaw',
+      patch: {
+        status: 'checking',
+        message: t('runtime.status.installingOpenClaw'),
+        path: undefined,
+      },
+    });
+
+    try {
+      const response = await desktopApi.ipcRenderer.invoke('runtime:installRecommendedOpenClaw') as RuntimeInstallResponse;
+      if (response.success === false) {
+        throw new Error(response.error || t('runtime.status.openclawInstallFailed'));
+      }
+
+      toast.success(t('runtime.toast.openclawInstalled', { version: response.result?.version || '' }));
+      await runChecks();
+    } catch (error) {
+      dispatchChecks({
+        type: 'set',
+        key: 'openclaw',
+        patch: {
+          status: 'error',
+          message: error instanceof Error ? error.message : t('runtime.status.openclawInstallFailed'),
+          path: undefined,
+        },
+      });
+    }
+  };
+
   const handleStartGateway = async () => {
     dispatchChecks({
       type: 'set',
@@ -736,7 +806,20 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         message: t('runtime.status.gatewayStarting'),
       },
     });
-    await startGateway();
+
+    try {
+      await startGateway();
+      await evaluateGatewayAvailability(true);
+    } catch (error) {
+      dispatchChecks({
+        type: 'set',
+        key: 'gateway',
+        patch: {
+          status: 'error',
+          message: error instanceof Error ? error.message : t('runtime.status.gatewayFailed'),
+        },
+      });
+    }
   };
 
   const handleShowLogs = async () => {
@@ -764,14 +847,24 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const checkValues = useMemo(() => Object.values(checks.checks), [checks.checks]);
   const hasError = checkValues.some((check) => check.status === 'error');
   const hasChecking = checkValues.some((check) => check.status === 'checking');
-  const gatewayActionLabel = runtimeReady && checks.checks.gateway.status === 'error'
+  const nodeActionLabel = checks.checks.nodejs.status === 'error'
+    ? t('runtime.installNode')
+    : undefined;
+  const nodeAction = checks.checks.nodejs.status === 'error'
+    ? handleInstallNode
+    : undefined;
+  const openclawActionLabel = checks.checks.openclaw.status === 'error'
+    ? t('runtime.installOpenClaw')
+    : undefined;
+  const openclawAction = checks.checks.openclaw.status === 'error'
+    ? handleInstallOpenClaw
+    : undefined;
+  const gatewayActionLabel = runtimeReady && (checks.checks.gateway.status === 'error' || checks.checks.gateway.status === 'idle')
     ? t('runtime.startGateway')
-    : t('runtime.recheckCard');
-  const gatewayAction = runtimeReady && checks.checks.gateway.status === 'error'
+    : undefined;
+  const gatewayAction = runtimeReady && (checks.checks.gateway.status === 'error' || checks.checks.gateway.status === 'idle')
     ? handleStartGateway
-    : () => {
-        void runChecks();
-      };
+    : undefined;
 
   return (
     <div className="space-y-4">
@@ -793,8 +886,8 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
           description={t('runtime.cards.node.description')}
           state={checks.checks.nodejs}
           statusLabel={t(`runtime.states.${checks.checks.nodejs.status}`)}
-          actionLabel={t('runtime.recheckCard')}
-          onAction={() => void runChecks()}
+          actionLabel={nodeActionLabel}
+          onAction={nodeAction}
           actionDisabled={checks.checks.nodejs.status === 'checking'}
         />
         <RuntimeCheckCard
@@ -802,8 +895,8 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
           description={t('runtime.cards.openclaw.description')}
           state={checks.checks.openclaw}
           statusLabel={t(`runtime.states.${checks.checks.openclaw.status}`)}
-          actionLabel={t('runtime.recheckCard')}
-          onAction={() => void runChecks()}
+          actionLabel={openclawActionLabel}
+          onAction={openclawAction}
           actionDisabled={checks.checks.openclaw.status === 'checking'}
         />
         <RuntimeCheckCard

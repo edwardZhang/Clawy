@@ -43,6 +43,8 @@
         "nodejs": "Node.js ランタイム",
         "openclaw": "OpenClaw パッケージ",
         "gateway": "ゲートウェイサービス",
+        "installNode": "管理対象 Node.js をインストール",
+        "installOpenClaw": "OpenClaw をインストール",
         "startGateway": "ゲートウェイを起動",
         "cards": {
             "node": {
@@ -73,6 +75,10 @@
             "waitingForDependencies": "先に Node.js と OpenClaw が通過するのを待っています。",
             "nodeMissing": "互換性のある Node.js ランタイムが見つかりません。",
             "openclawMissing": "互換性のある OpenClaw パッケージが見つかりません。",
+            "installingNode": "管理対象 Node.js ランタイムをインストールしています...",
+            "installingOpenClaw": "OpenClaw パッケージをインストールしています...",
+            "nodeInstallFailed": "管理対象 Node.js のインストールに失敗しました。",
+            "openclawInstallFailed": "OpenClaw のインストールに失敗しました。",
             "checkFailed": "確認に失敗しました: {{error}}"
         },
         "issue": {
@@ -83,6 +89,10 @@
             "pendingTitle": "ランタイムチェックを続行しています",
             "pending": "Clawy がランタイム環境を検証しています。3 枚のカードすべてが準備完了になるまで「次へ」は無効のままです。",
             "readyWhenAllPass": "次のセットアップ手順に進むには、3 枚のカードすべてが「準備完了」になる必要があります。"
+        },
+        "toast": {
+            "nodeInstalled": "管理対象 Node.js {{version}} をインストールしました。",
+            "openclawInstalled": "OpenClaw {{version}} をインストールしました。"
         },
         "logs": {
             "title": "アプリケーションログ",
