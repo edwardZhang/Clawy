@@ -24,6 +24,16 @@ use uuid::Uuid;
 const DEFAULT_GATEWAY_PORT: u16 = 18_789;
 const DEFAULT_GATEWAY_SCOPES: [&str; 1] = ["operator.admin"];
 const VISION_MIME_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/bmp", "image/webp"];
+#[allow(dead_code)]
+const MANAGED_RUNTIME_SCHEMA_VERSION: u32 = 1;
+#[allow(dead_code)]
+const MANAGED_RUNTIME_DIR_NAME: &str = "runtime";
+#[allow(dead_code)]
+const MANAGED_RUNTIME_VERSIONS_DIR_NAME: &str = "versions";
+#[allow(dead_code)]
+const MANAGED_RUNTIME_STATE_FILE_NAME: &str = "runtime-state.json";
+#[allow(dead_code)]
+const MANAGED_RUNTIME_MANIFEST_FILE_NAME: &str = "manifest.json";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,6 +181,148 @@ struct ReleasePlatformDownloads {
     appimage_x64: Option<String>,
     appimage_arm64: Option<String>,
     rpm_x64: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum ManagedRuntimeKind {
+    Node,
+    OpenClaw,
+}
+
+#[allow(dead_code)]
+impl ManagedRuntimeKind {
+    fn dir_name(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::OpenClaw => "openclaw",
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ManagedRuntimeVersionPointer {
+    version: String,
+    manifest_path: PathBuf,
+}
+
+#[allow(dead_code)]
+impl ManagedRuntimeVersionPointer {
+    fn new(kind: ManagedRuntimeKind, version: impl Into<String>) -> Self {
+        let version = version.into();
+
+        Self {
+            manifest_path: managed_runtime_manifest_relative_path(kind, &version),
+            version,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+struct ManagedRuntimeRegistry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current: Option<ManagedRuntimeVersionPointer>,
+    #[serde(default)]
+    versions: Vec<ManagedRuntimeVersionPointer>,
+}
+
+#[allow(dead_code)]
+impl ManagedRuntimeRegistry {
+    fn upsert_version(
+        &mut self,
+        kind: ManagedRuntimeKind,
+        version: impl Into<String>,
+    ) -> ManagedRuntimeVersionPointer {
+        let version = version.into();
+
+        if let Some(existing) = self
+            .versions
+            .iter()
+            .find(|pointer| pointer.version == version)
+        {
+            return existing.clone();
+        }
+
+        let pointer = ManagedRuntimeVersionPointer::new(kind, version);
+        self.versions.push(pointer.clone());
+        pointer
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ManagedRuntimeState {
+    schema_version: u32,
+    #[serde(default)]
+    node: ManagedRuntimeRegistry,
+    #[serde(default)]
+    openclaw: ManagedRuntimeRegistry,
+}
+
+#[allow(dead_code)]
+impl Default for ManagedRuntimeState {
+    fn default() -> Self {
+        Self {
+            schema_version: MANAGED_RUNTIME_SCHEMA_VERSION,
+            node: ManagedRuntimeRegistry::default(),
+            openclaw: ManagedRuntimeRegistry::default(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl ManagedRuntimeState {
+    fn registry_mut(&mut self, kind: ManagedRuntimeKind) -> &mut ManagedRuntimeRegistry {
+        match kind {
+            ManagedRuntimeKind::Node => &mut self.node,
+            ManagedRuntimeKind::OpenClaw => &mut self.openclaw,
+        }
+    }
+
+    fn track_version(
+        &mut self,
+        kind: ManagedRuntimeKind,
+        version: impl Into<String>,
+    ) -> ManagedRuntimeVersionPointer {
+        self.registry_mut(kind).upsert_version(kind, version)
+    }
+
+    fn set_current_version(&mut self, kind: ManagedRuntimeKind, version: impl Into<String>) {
+        let pointer = self.track_version(kind, version);
+        self.registry_mut(kind).current = Some(pointer);
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ManagedRuntimeManifest {
+    schema_version: u32,
+    runtime: ManagedRuntimeKind,
+    version: String,
+    runtime_dir: PathBuf,
+    installed_at: String,
+}
+
+#[allow(dead_code)]
+impl ManagedRuntimeManifest {
+    fn new(runtime: ManagedRuntimeKind, version: impl Into<String>) -> Self {
+        let version = version.into();
+
+        Self {
+            schema_version: MANAGED_RUNTIME_SCHEMA_VERSION,
+            runtime,
+            runtime_dir: managed_runtime_version_relative_dir(runtime, &version),
+            version,
+            installed_at: now_iso_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -404,10 +556,99 @@ fn platform_name() -> &'static str {
     }
 }
 
+#[allow(dead_code)]
+fn clawy_base_dir_from_home(home_dir: &Path) -> PathBuf {
+    home_dir.join(".clawy-tauri")
+}
+
+#[allow(dead_code)]
+fn openclaw_config_dir_from_home(home_dir: &Path) -> PathBuf {
+    home_dir.join(".openclaw")
+}
+
+#[allow(dead_code)]
+fn managed_runtime_root_dir_from_base(base_dir: &Path) -> PathBuf {
+    base_dir.join(MANAGED_RUNTIME_DIR_NAME)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_root_dir() -> PathBuf {
+    managed_runtime_root_dir_from_base(&clawy_base_dir())
+}
+
+#[allow(dead_code)]
+fn managed_runtime_dir_from_base(base_dir: &Path, kind: ManagedRuntimeKind) -> PathBuf {
+    managed_runtime_root_dir_from_base(base_dir).join(kind.dir_name())
+}
+
+#[allow(dead_code)]
+fn managed_runtime_dir(kind: ManagedRuntimeKind) -> PathBuf {
+    managed_runtime_dir_from_base(&clawy_base_dir(), kind)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_versions_dir_from_base(base_dir: &Path, kind: ManagedRuntimeKind) -> PathBuf {
+    managed_runtime_dir_from_base(base_dir, kind).join(MANAGED_RUNTIME_VERSIONS_DIR_NAME)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_versions_dir(kind: ManagedRuntimeKind) -> PathBuf {
+    managed_runtime_versions_dir_from_base(&clawy_base_dir(), kind)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_version_dir_from_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+    version: &str,
+) -> PathBuf {
+    managed_runtime_versions_dir_from_base(base_dir, kind).join(version)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_version_dir(kind: ManagedRuntimeKind, version: &str) -> PathBuf {
+    managed_runtime_version_dir_from_base(&clawy_base_dir(), kind, version)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_state_path_from_base(base_dir: &Path) -> PathBuf {
+    managed_runtime_root_dir_from_base(base_dir).join(MANAGED_RUNTIME_STATE_FILE_NAME)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_state_path() -> PathBuf {
+    managed_runtime_state_path_from_base(&clawy_base_dir())
+}
+
+#[allow(dead_code)]
+fn managed_runtime_manifest_path_from_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+    version: &str,
+) -> PathBuf {
+    managed_runtime_version_dir_from_base(base_dir, kind, version)
+        .join(MANAGED_RUNTIME_MANIFEST_FILE_NAME)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_manifest_path(kind: ManagedRuntimeKind, version: &str) -> PathBuf {
+    managed_runtime_manifest_path_from_base(&clawy_base_dir(), kind, version)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_version_relative_dir(kind: ManagedRuntimeKind, version: &str) -> PathBuf {
+    PathBuf::from(kind.dir_name())
+        .join(MANAGED_RUNTIME_VERSIONS_DIR_NAME)
+        .join(version)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_manifest_relative_path(kind: ManagedRuntimeKind, version: &str) -> PathBuf {
+    managed_runtime_version_relative_dir(kind, version).join(MANAGED_RUNTIME_MANIFEST_FILE_NAME)
+}
+
 fn clawy_base_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".clawy-tauri")
+    clawy_base_dir_from_home(&dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
 
 fn logs_dir() -> PathBuf {
@@ -431,9 +672,7 @@ fn outbound_media_dir() -> PathBuf {
 }
 
 fn openclaw_config_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".openclaw")
+    openclaw_config_dir_from_home(&dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
 
 fn openclaw_skills_dir() -> PathBuf {
@@ -452,6 +691,112 @@ where
         .ok()
         .and_then(|content| serde_json::from_str(&content).ok())
         .unwrap_or_default()
+}
+
+#[allow(dead_code)]
+fn load_managed_runtime_state_from_base(base_dir: &Path) -> ManagedRuntimeState {
+    read_json_or_default(&managed_runtime_state_path_from_base(base_dir))
+}
+
+#[allow(dead_code)]
+fn load_managed_runtime_state() -> ManagedRuntimeState {
+    load_managed_runtime_state_from_base(&clawy_base_dir())
+}
+
+#[allow(dead_code)]
+fn save_managed_runtime_state_to_base(
+    base_dir: &Path,
+    state: &ManagedRuntimeState,
+) -> Result<(), String> {
+    write_json(&managed_runtime_state_path_from_base(base_dir), state)
+}
+
+#[allow(dead_code)]
+fn save_managed_runtime_state(state: &ManagedRuntimeState) -> Result<(), String> {
+    save_managed_runtime_state_to_base(&clawy_base_dir(), state)
+}
+
+#[allow(dead_code)]
+fn load_or_create_managed_runtime_state_in_base(
+    base_dir: &Path,
+) -> Result<ManagedRuntimeState, String> {
+    let path = managed_runtime_state_path_from_base(base_dir);
+    if path.exists() {
+        return Ok(load_managed_runtime_state_from_base(base_dir));
+    }
+
+    let state = ManagedRuntimeState::default();
+    save_managed_runtime_state_to_base(base_dir, &state)?;
+    Ok(state)
+}
+
+#[allow(dead_code)]
+fn load_or_create_managed_runtime_state() -> Result<ManagedRuntimeState, String> {
+    load_or_create_managed_runtime_state_in_base(&clawy_base_dir())
+}
+
+#[allow(dead_code)]
+fn load_managed_runtime_manifest_from_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+    version: &str,
+) -> ManagedRuntimeManifest {
+    let path = managed_runtime_manifest_path_from_base(base_dir, kind, version);
+
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_else(|| ManagedRuntimeManifest::new(kind, version))
+}
+
+#[allow(dead_code)]
+fn load_managed_runtime_manifest(
+    kind: ManagedRuntimeKind,
+    version: &str,
+) -> ManagedRuntimeManifest {
+    load_managed_runtime_manifest_from_base(&clawy_base_dir(), kind, version)
+}
+
+#[allow(dead_code)]
+fn save_managed_runtime_manifest_to_base(
+    base_dir: &Path,
+    manifest: &ManagedRuntimeManifest,
+) -> Result<(), String> {
+    write_json(
+        &managed_runtime_manifest_path_from_base(base_dir, manifest.runtime, &manifest.version),
+        manifest,
+    )
+}
+
+#[allow(dead_code)]
+fn save_managed_runtime_manifest(manifest: &ManagedRuntimeManifest) -> Result<(), String> {
+    save_managed_runtime_manifest_to_base(&clawy_base_dir(), manifest)
+}
+
+#[allow(dead_code)]
+fn load_or_create_managed_runtime_manifest_in_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+    version: &str,
+) -> Result<ManagedRuntimeManifest, String> {
+    let path = managed_runtime_manifest_path_from_base(base_dir, kind, version);
+    if path.exists() {
+        return Ok(load_managed_runtime_manifest_from_base(
+            base_dir, kind, version,
+        ));
+    }
+
+    let manifest = ManagedRuntimeManifest::new(kind, version);
+    save_managed_runtime_manifest_to_base(base_dir, &manifest)?;
+    Ok(manifest)
+}
+
+#[allow(dead_code)]
+fn load_or_create_managed_runtime_manifest(
+    kind: ManagedRuntimeKind,
+    version: &str,
+) -> Result<ManagedRuntimeManifest, String> {
+    load_or_create_managed_runtime_manifest_in_base(&clawy_base_dir(), kind, version)
 }
 
 fn write_json<T>(path: &Path, value: &T) -> Result<(), String>
@@ -1475,9 +1820,8 @@ fn list_openclaw_devices() -> Result<Value, String> {
         ],
         "openclaw devices list",
     )?;
-    serde_json::from_str::<Value>(&output).map_err(|err| {
-        format!("Failed to parse `openclaw devices list --json` output: {err}")
-    })
+    serde_json::from_str::<Value>(&output)
+        .map_err(|err| format!("Failed to parse `openclaw devices list --json` output: {err}"))
 }
 
 fn auto_approve_local_device_pairing() -> Result<Value, String> {
@@ -1543,8 +1887,8 @@ fn auto_approve_local_device_pairing() -> Result<Value, String> {
         ],
         "openclaw devices approve",
     )?;
-    let approved = serde_json::from_str::<Value>(&output)
-        .unwrap_or_else(|_| json!({ "raw": output }));
+    let approved =
+        serde_json::from_str::<Value>(&output).unwrap_or_else(|_| json!({ "raw": output }));
 
     Ok(json!({
         "success": true,
@@ -1596,11 +1940,20 @@ fn split_columns(line: &str) -> Vec<String> {
 
 fn clawhub_cli_entry_path() -> PathBuf {
     let cwd = current_workspace_dir();
-    if let Some(path) = packaged_resource_path(Path::new("clawhub").join("bin").join("clawdhub.js").as_path()) {
+    if let Some(path) = packaged_resource_path(
+        Path::new("clawhub")
+            .join("bin")
+            .join("clawdhub.js")
+            .as_path(),
+    ) {
         return path;
     }
 
-    let bundled = cwd.join("build").join("clawhub").join("bin").join("clawdhub.js");
+    let bundled = cwd
+        .join("build")
+        .join("clawhub")
+        .join("bin")
+        .join("clawdhub.js");
     if bundled.exists() {
         return bundled;
     }
@@ -1614,7 +1967,10 @@ fn clawhub_cli_entry_path() -> PathBuf {
         return dev_path;
     }
 
-    cwd.join("build").join("clawhub").join("bin").join("clawdhub.js")
+    cwd.join("build")
+        .join("clawhub")
+        .join("bin")
+        .join("clawdhub.js")
 }
 
 fn run_command_capture(command: &mut Command, label: &str) -> Result<String, String> {
@@ -1943,7 +2299,9 @@ fn ensure_dingtalk_plugin_installed() -> Result<(bool, Option<String>), String> 
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut candidate_sources = Vec::new();
-    if let Some(packaged) = packaged_resource_path(Path::new("openclaw-plugins").join("dingtalk").as_path()) {
+    if let Some(packaged) =
+        packaged_resource_path(Path::new("openclaw-plugins").join("dingtalk").as_path())
+    {
         candidate_sources.push(packaged);
     }
     candidate_sources.extend([
@@ -2938,9 +3296,12 @@ fn uv_target_dir_name() -> String {
 }
 
 fn bundled_binary_path(binary_name: &str) -> PathBuf {
-    if let Some(packaged_path) =
-        packaged_resource_path(Path::new("bin").join(uv_target_dir_name()).join(binary_name).as_path())
-    {
+    if let Some(packaged_path) = packaged_resource_path(
+        Path::new("bin")
+            .join(uv_target_dir_name())
+            .join(binary_name)
+            .as_path(),
+    ) {
         return packaged_path;
     }
 
@@ -5798,4 +6159,144 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Clawy Tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "clawy-managed-runtime-{name}-{}",
+                Uuid::new_v4().simple()
+            ));
+            fs::create_dir_all(&path).expect("create test dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn managed_runtime_helpers_build_versioned_layout_without_touching_openclaw_data_dir() {
+        let home_dir = PathBuf::from("/tmp/clawy-home");
+        let clawy_dir = clawy_base_dir_from_home(&home_dir);
+
+        assert_eq!(clawy_dir, home_dir.join(".clawy-tauri"));
+        assert_eq!(
+            openclaw_config_dir_from_home(&home_dir),
+            home_dir.join(".openclaw")
+        );
+        assert_eq!(
+            managed_runtime_root_dir_from_base(&clawy_dir),
+            clawy_dir.join("runtime")
+        );
+        assert_eq!(
+            managed_runtime_version_dir_from_base(&clawy_dir, ManagedRuntimeKind::Node, "20.18.0"),
+            clawy_dir
+                .join("runtime")
+                .join("node")
+                .join("versions")
+                .join("20.18.0")
+        );
+        assert_eq!(
+            managed_runtime_manifest_path_from_base(
+                &clawy_dir,
+                ManagedRuntimeKind::OpenClaw,
+                "2026.3.2",
+            ),
+            clawy_dir
+                .join("runtime")
+                .join("openclaw")
+                .join("versions")
+                .join("2026.3.2")
+                .join("manifest.json")
+        );
+    }
+
+    #[test]
+    fn managed_runtime_state_load_or_create_uses_sane_defaults_and_explicit_pointers() {
+        let test_dir = TestDir::new("state");
+
+        let mut state = load_or_create_managed_runtime_state_in_base(test_dir.path())
+            .expect("create runtime state");
+
+        assert_eq!(state.schema_version, MANAGED_RUNTIME_SCHEMA_VERSION);
+        assert!(state.node.current.is_none());
+        assert!(state.node.versions.is_empty());
+        assert!(managed_runtime_state_path_from_base(test_dir.path()).exists());
+
+        state.set_current_version(ManagedRuntimeKind::Node, "20.18.0");
+        state.track_version(ManagedRuntimeKind::OpenClaw, "2026.3.2");
+        save_managed_runtime_state_to_base(test_dir.path(), &state).expect("save runtime state");
+
+        let reloaded = load_managed_runtime_state_from_base(test_dir.path());
+        assert_eq!(
+            reloaded.node.current,
+            Some(ManagedRuntimeVersionPointer::new(
+                ManagedRuntimeKind::Node,
+                "20.18.0",
+            ))
+        );
+        assert_eq!(
+            reloaded.openclaw.versions,
+            vec![ManagedRuntimeVersionPointer::new(
+                ManagedRuntimeKind::OpenClaw,
+                "2026.3.2",
+            )]
+        );
+    }
+
+    #[test]
+    fn managed_runtime_manifest_load_or_create_persists_node_and_openclaw_versions() {
+        let test_dir = TestDir::new("manifest");
+
+        let node_manifest = load_or_create_managed_runtime_manifest_in_base(
+            test_dir.path(),
+            ManagedRuntimeKind::Node,
+            "20.18.0",
+        )
+        .expect("create node manifest");
+        let openclaw_manifest = load_or_create_managed_runtime_manifest_in_base(
+            test_dir.path(),
+            ManagedRuntimeKind::OpenClaw,
+            "2026.3.2",
+        )
+        .expect("create openclaw manifest");
+
+        assert_eq!(
+            node_manifest.runtime_dir,
+            PathBuf::from("node").join("versions").join("20.18.0")
+        );
+        assert_eq!(
+            openclaw_manifest.runtime_dir,
+            PathBuf::from("openclaw").join("versions").join("2026.3.2")
+        );
+        assert!(managed_runtime_manifest_path_from_base(
+            test_dir.path(),
+            ManagedRuntimeKind::Node,
+            "20.18.0",
+        )
+        .exists());
+
+        let reloaded = load_managed_runtime_manifest_from_base(
+            test_dir.path(),
+            ManagedRuntimeKind::OpenClaw,
+            "2026.3.2",
+        );
+        assert_eq!(reloaded, openclaw_manifest);
+    }
 }
