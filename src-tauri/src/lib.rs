@@ -3,7 +3,7 @@ use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;
 use reqwest::{NoProxy, Proxy};
-use semver::Version;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -24,6 +24,9 @@ use uuid::Uuid;
 const DEFAULT_GATEWAY_PORT: u16 = 18_789;
 const DEFAULT_GATEWAY_SCOPES: [&str; 1] = ["operator.admin"];
 const VISION_MIME_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/bmp", "image/webp"];
+const SUPPORTED_NODE_VERSION_RANGE: &str = ">=24.8.0, <25.0.0";
+const NODE_SMOKE_TEST_SCRIPT: &str = "process.stdout.write('clawy-node-smoke')";
+const NODE_SMOKE_TEST_OUTPUT: &str = "clawy-node-smoke";
 #[allow(dead_code)]
 const MANAGED_RUNTIME_SCHEMA_VERSION: u32 = 1;
 #[allow(dead_code)]
@@ -322,6 +325,170 @@ impl ManagedRuntimeManifest {
             version,
             installed_at: now_iso_string(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum NodeBinarySource {
+    Path,
+    Bundled,
+}
+
+impl NodeBinarySource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Path => "path",
+            Self::Bundled => "bundled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum NodeBinaryDiagnosticStatus {
+    Accepted,
+    Rejected,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum NodeBinaryDiagnosticReason {
+    NotFoundInPath,
+    PathDoesNotExist,
+    VersionCommandFailed,
+    InvalidVersion,
+    UnsupportedVersion,
+    SmokeTestFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct NodeBinaryDiagnostic {
+    source: NodeBinarySource,
+    path: Option<PathBuf>,
+    status: NodeBinaryDiagnosticStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<NodeBinaryDiagnosticReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+}
+
+impl NodeBinaryDiagnostic {
+    fn accepted(source: NodeBinarySource, path: PathBuf, version: String) -> Self {
+        Self {
+            source,
+            path: Some(path),
+            status: NodeBinaryDiagnosticStatus::Accepted,
+            reason: None,
+            detail: None,
+            version: Some(version),
+        }
+    }
+
+    fn rejected(
+        source: NodeBinarySource,
+        path: Option<PathBuf>,
+        reason: NodeBinaryDiagnosticReason,
+        detail: impl Into<String>,
+        version: Option<String>,
+    ) -> Self {
+        Self {
+            source,
+            path,
+            status: NodeBinaryDiagnosticStatus::Rejected,
+            reason: Some(reason),
+            detail: Some(detail.into()),
+            version,
+        }
+    }
+
+    fn missing(
+        source: NodeBinarySource,
+        reason: NodeBinaryDiagnosticReason,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            path: None,
+            status: NodeBinaryDiagnosticStatus::Missing,
+            reason: Some(reason),
+            detail: Some(detail.into()),
+            version: None,
+        }
+    }
+
+    fn is_accepted(&self) -> bool {
+        self.status == NodeBinaryDiagnosticStatus::Accepted
+    }
+
+    fn summary(&self) -> String {
+        let location = self
+            .path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "<unresolved>".into());
+
+        match self.status {
+            NodeBinaryDiagnosticStatus::Accepted => format!(
+                "{} node accepted at {} ({})",
+                self.source.as_str(),
+                location,
+                self.version.as_deref().unwrap_or("unknown version")
+            ),
+            NodeBinaryDiagnosticStatus::Rejected | NodeBinaryDiagnosticStatus::Missing => {
+                let reason = self
+                    .reason
+                    .map(|reason| format!("{reason:?}"))
+                    .unwrap_or_else(|| "unknown".into());
+                let detail = self.detail.as_deref().unwrap_or("no details available");
+                format!(
+                    "{} node rejected at {} ({}: {})",
+                    self.source.as_str(),
+                    location,
+                    reason,
+                    detail
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+struct NodeBinaryResolution {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<NodeBinarySource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    diagnostics: Vec<NodeBinaryDiagnostic>,
+}
+
+impl NodeBinaryResolution {
+    fn accepted(diagnostics: Vec<NodeBinaryDiagnostic>, accepted: &NodeBinaryDiagnostic) -> Self {
+        Self {
+            path: accepted.path.clone(),
+            source: Some(accepted.source),
+            version: accepted.version.clone(),
+            diagnostics,
+        }
+    }
+
+    fn failure_message(&self) -> String {
+        if self.diagnostics.is_empty() {
+            return "No Node.js candidates were probed".into();
+        }
+
+        self.diagnostics
+            .iter()
+            .map(NodeBinaryDiagnostic::summary)
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 }
 
@@ -3327,16 +3494,44 @@ fn bundled_node_path() -> PathBuf {
     bundled_binary_path(binary_name)
 }
 
-fn find_command_in_path(command: &str) -> bool {
-    let probe = if cfg!(windows) { "where" } else { "which" };
-    Command::new(probe)
-        .arg(command)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+fn find_command_path(command: &str) -> Option<PathBuf> {
+    let command_path = Path::new(command);
+    if command_path.components().count() > 1 || command_path.is_absolute() {
+        return command_path.is_file().then(|| command_path.to_path_buf());
+    }
+
+    let search_path = std::env::var_os("PATH")?;
+    let candidate_suffixes = if cfg!(windows) && command_path.extension().is_none() {
+        std::env::var("PATHEXT")
+            .ok()
+            .map(|value| {
+                value
+                    .split(';')
+                    .filter(|suffix| !suffix.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|suffixes| !suffixes.is_empty())
+            .unwrap_or_else(|| vec![".exe".into(), ".cmd".into(), ".bat".into(), ".com".into()])
+    } else {
+        vec![String::new()]
+    };
+
+    for directory in std::env::split_paths(&search_path) {
+        for suffix in &candidate_suffixes {
+            let candidate = if suffix.is_empty() {
+                directory.join(command)
+            } else {
+                directory.join(format!("{command}{suffix}"))
+            };
+
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }
 
 fn resolve_uv_binary() -> (PathBuf, &'static str) {
@@ -3344,31 +3539,149 @@ fn resolve_uv_binary() -> (PathBuf, &'static str) {
     if bundled.exists() {
         return (bundled, "bundled");
     }
-    if find_command_in_path("uv") {
-        return (PathBuf::from("uv"), "path");
+    if let Some(path) = find_command_path("uv") {
+        return (path, "path");
     }
     (bundled, "missing")
 }
 
-fn resolve_node_binary() -> (PathBuf, &'static str) {
-    let bundled = bundled_node_path();
-    if bundled.exists() {
-        return (bundled, "bundled");
+fn supported_node_version_req() -> VersionReq {
+    VersionReq::parse(SUPPORTED_NODE_VERSION_RANGE).expect("supported Node.js range is valid")
+}
+
+fn resolve_node_binary_version(path: &Path) -> Result<String, String> {
+    let mut command = Command::new(path);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let raw_version = run_command_capture(&mut command, "node --version")?;
+    let normalized = raw_version.trim().trim_start_matches('v');
+    let parsed = Version::parse(normalized)
+        .map_err(|err| format!("Unable to parse Node.js version `{raw_version}`: {err}"))?;
+
+    Ok(parsed.to_string())
+}
+
+fn run_node_smoke_test(path: &Path) -> Result<(), String> {
+    let mut command = Command::new(path);
+    command
+        .args(["-e", NODE_SMOKE_TEST_SCRIPT])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = run_command_capture(&mut command, "node smoke test")?;
+    if output == NODE_SMOKE_TEST_OUTPUT {
+        return Ok(());
     }
-    if find_command_in_path("node") {
-        return (PathBuf::from("node"), "path");
+
+    Err(format!(
+        "Node.js smoke test returned `{output}` instead of `{NODE_SMOKE_TEST_OUTPUT}`"
+    ))
+}
+
+fn inspect_node_binary_candidate(
+    source: NodeBinarySource,
+    path: Option<PathBuf>,
+) -> NodeBinaryDiagnostic {
+    let Some(path) = path else {
+        return NodeBinaryDiagnostic::missing(
+            source,
+            NodeBinaryDiagnosticReason::NotFoundInPath,
+            "Node.js was not found in PATH",
+        );
+    };
+
+    if !path.exists() {
+        return NodeBinaryDiagnostic::rejected(
+            source,
+            Some(path),
+            NodeBinaryDiagnosticReason::PathDoesNotExist,
+            "Node.js candidate path does not exist",
+            None,
+        );
     }
-    (bundled, "missing")
+
+    let version = match resolve_node_binary_version(&path) {
+        Ok(version) => version,
+        Err(err) => {
+            let reason = if err.contains("Unable to parse Node.js version") {
+                NodeBinaryDiagnosticReason::InvalidVersion
+            } else {
+                NodeBinaryDiagnosticReason::VersionCommandFailed
+            };
+            return NodeBinaryDiagnostic::rejected(source, Some(path), reason, err, None);
+        }
+    };
+
+    if !supported_node_version_req()
+        .matches(&Version::parse(&version).expect("validated Node.js version should parse"))
+    {
+        return NodeBinaryDiagnostic::rejected(
+            source,
+            Some(path),
+            NodeBinaryDiagnosticReason::UnsupportedVersion,
+            format!(
+                "Detected Node.js {version}, but supported range is {SUPPORTED_NODE_VERSION_RANGE}"
+            ),
+            Some(version),
+        );
+    }
+
+    if let Err(err) = run_node_smoke_test(&path) {
+        return NodeBinaryDiagnostic::rejected(
+            source,
+            Some(path),
+            NodeBinaryDiagnosticReason::SmokeTestFailed,
+            err,
+            Some(version),
+        );
+    }
+
+    NodeBinaryDiagnostic::accepted(source, path, version)
+}
+
+fn resolve_node_binary_with_candidates(
+    system_path: Option<PathBuf>,
+    bundled_path: PathBuf,
+) -> NodeBinaryResolution {
+    let mut diagnostics = Vec::new();
+
+    let system_diagnostic = inspect_node_binary_candidate(NodeBinarySource::Path, system_path);
+    diagnostics.push(system_diagnostic.clone());
+    if system_diagnostic.is_accepted() {
+        return NodeBinaryResolution::accepted(diagnostics, &system_diagnostic);
+    }
+
+    let bundled_diagnostic =
+        inspect_node_binary_candidate(NodeBinarySource::Bundled, Some(bundled_path));
+    diagnostics.push(bundled_diagnostic.clone());
+    if bundled_diagnostic.is_accepted() {
+        return NodeBinaryResolution::accepted(diagnostics, &bundled_diagnostic);
+    }
+
+    NodeBinaryResolution {
+        diagnostics,
+        ..NodeBinaryResolution::default()
+    }
+}
+
+fn resolve_node_binary() -> NodeBinaryResolution {
+    resolve_node_binary_with_candidates(find_command_path("node"), bundled_node_path())
 }
 
 fn node_command() -> Result<Command, String> {
-    let (node_binary, source) = resolve_node_binary();
-    if source == "missing" || (!node_binary.exists() && node_binary != PathBuf::from("node")) {
+    let resolution = resolve_node_binary();
+    let Some(node_binary) = resolution.path else {
         return Err(format!(
-            "node not found in system PATH and bundled binary missing at {}",
-            node_binary.to_string_lossy()
+            "No compatible Node.js runtime available: {}",
+            resolution.failure_message()
         ));
-    }
+    };
+
     let mut command = Command::new(node_binary);
     apply_proxy_env(&mut command, &load_settings());
     Ok(command)
@@ -6190,6 +6503,55 @@ mod tests {
         }
     }
 
+    fn write_test_script(path: &Path, contents: &str) {
+        fs::write(path, contents).expect("write test script");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = fs::metadata(path).expect("read metadata").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(path, permissions).expect("set execute bit");
+        }
+    }
+
+    fn fake_node_script_path(base_dir: &Path, name: &str) -> PathBuf {
+        if cfg!(windows) {
+            base_dir.join(format!("{name}.cmd"))
+        } else {
+            base_dir.join(name)
+        }
+    }
+
+    fn create_fake_node_binary(
+        base_dir: &Path,
+        name: &str,
+        version: &str,
+        smoke_ok: bool,
+    ) -> PathBuf {
+        let path = fake_node_script_path(base_dir, name);
+        let script = if cfg!(windows) {
+            let smoke_exit = if smoke_ok { "0" } else { "1" };
+            format!(
+                "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo v{version}\r\n  exit /b 0\r\n)\r\nif \"%~1\"==\"-e\" (\r\n  if \"%~2\"==\"{NODE_SMOKE_TEST_SCRIPT}\" (\r\n    if \"{smoke_exit}\"==\"0\" (\r\n      <nul set /p ={NODE_SMOKE_TEST_OUTPUT}\r\n    )\r\n    exit /b {smoke_exit}\r\n  )\r\n)\r\necho unexpected args %* 1>&2\r\nexit /b 1\r\n"
+            )
+        } else {
+            let smoke_body = if smoke_ok {
+                format!("  printf '{NODE_SMOKE_TEST_OUTPUT}'\n  exit 0")
+            } else {
+                "  echo 'smoke test failed' >&2\n  exit 1".into()
+            };
+
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf 'v{version}\\n'\n  exit 0\nfi\nif [ \"$1\" = \"-e\" ] && [ \"$2\" = \"{NODE_SMOKE_TEST_SCRIPT}\" ]; then\n{smoke_body}\nfi\necho \"unexpected args: $*\" >&2\nexit 1\n"
+            )
+        };
+
+        write_test_script(&path, &script);
+        path
+    }
+
     #[test]
     fn managed_runtime_helpers_build_versioned_layout_without_touching_openclaw_data_dir() {
         let home_dir = PathBuf::from("/tmp/clawy-home");
@@ -6298,5 +6660,107 @@ mod tests {
             "2026.3.2",
         );
         assert_eq!(reloaded, openclaw_manifest);
+    }
+
+    #[test]
+    fn node_binary_resolution_prefers_supported_system_node() {
+        let test_dir = TestDir::new("node-resolution-system");
+        let system_node = create_fake_node_binary(test_dir.path(), "system-node", "24.8.0", true);
+        let bundled_node = create_fake_node_binary(test_dir.path(), "bundled-node", "24.9.0", true);
+
+        let resolution =
+            resolve_node_binary_with_candidates(Some(system_node.clone()), bundled_node);
+
+        assert_eq!(resolution.path, Some(system_node.clone()));
+        assert_eq!(resolution.source, Some(NodeBinarySource::Path));
+        assert_eq!(resolution.version.as_deref(), Some("24.8.0"));
+        assert_eq!(resolution.diagnostics.len(), 1);
+        assert_eq!(
+            resolution.diagnostics[0].status,
+            NodeBinaryDiagnosticStatus::Accepted
+        );
+        assert_eq!(
+            resolution.diagnostics[0].path.as_deref(),
+            Some(system_node.as_path())
+        );
+    }
+
+    #[test]
+    fn node_binary_resolution_rejects_unsupported_system_node_and_falls_back() {
+        let test_dir = TestDir::new("node-resolution-fallback-version");
+        let system_node = create_fake_node_binary(test_dir.path(), "system-node", "24.7.9", true);
+        let bundled_node = create_fake_node_binary(test_dir.path(), "bundled-node", "24.8.0", true);
+
+        let resolution =
+            resolve_node_binary_with_candidates(Some(system_node.clone()), bundled_node.clone());
+
+        assert_eq!(resolution.path, Some(bundled_node.clone()));
+        assert_eq!(resolution.source, Some(NodeBinarySource::Bundled));
+        assert_eq!(resolution.diagnostics.len(), 2);
+        assert_eq!(
+            resolution.diagnostics[0].reason,
+            Some(NodeBinaryDiagnosticReason::UnsupportedVersion)
+        );
+        assert_eq!(resolution.diagnostics[0].version.as_deref(), Some("24.7.9"));
+        assert_eq!(
+            resolution.diagnostics[1].status,
+            NodeBinaryDiagnosticStatus::Accepted
+        );
+        assert_eq!(
+            resolution.diagnostics[1].path.as_deref(),
+            Some(bundled_node.as_path())
+        );
+    }
+
+    #[test]
+    fn node_binary_resolution_rejects_smoke_test_failures() {
+        let test_dir = TestDir::new("node-resolution-smoke");
+        let system_node = create_fake_node_binary(test_dir.path(), "system-node", "24.8.0", false);
+        let bundled_node = create_fake_node_binary(test_dir.path(), "bundled-node", "24.8.1", true);
+
+        let resolution =
+            resolve_node_binary_with_candidates(Some(system_node), bundled_node.clone());
+
+        assert_eq!(resolution.path, Some(bundled_node));
+        assert_eq!(
+            resolution.diagnostics[0].reason,
+            Some(NodeBinaryDiagnosticReason::SmokeTestFailed)
+        );
+        assert_eq!(
+            resolution.diagnostics[1].status,
+            NodeBinaryDiagnosticStatus::Accepted
+        );
+    }
+
+    #[test]
+    fn node_binary_resolution_reports_missing_candidates() {
+        let test_dir = TestDir::new("node-resolution-missing");
+        let missing_bundled = fake_node_script_path(test_dir.path(), "missing-node");
+
+        let resolution = resolve_node_binary_with_candidates(None, missing_bundled.clone());
+
+        assert!(resolution.path.is_none());
+        assert_eq!(resolution.diagnostics.len(), 2);
+        assert_eq!(
+            resolution.diagnostics[0].status,
+            NodeBinaryDiagnosticStatus::Missing
+        );
+        assert_eq!(
+            resolution.diagnostics[0].reason,
+            Some(NodeBinaryDiagnosticReason::NotFoundInPath)
+        );
+        assert_eq!(
+            resolution.diagnostics[1].status,
+            NodeBinaryDiagnosticStatus::Rejected
+        );
+        assert_eq!(
+            resolution.diagnostics[1].reason,
+            Some(NodeBinaryDiagnosticReason::PathDoesNotExist)
+        );
+        assert_eq!(
+            resolution.diagnostics[1].path.as_deref(),
+            Some(missing_bundled.as_path())
+        );
+        assert!(resolution.failure_message().contains("NotFoundInPath"));
     }
 }
