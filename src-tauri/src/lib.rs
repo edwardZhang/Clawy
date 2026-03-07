@@ -14,7 +14,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::menu::{MenuBuilder, MenuEvent, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -26,6 +26,7 @@ const DEFAULT_GATEWAY_PORT: u16 = 18_789;
 const DEFAULT_GATEWAY_SCOPES: [&str; 1] = ["operator.admin"];
 const VISION_MIME_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/bmp", "image/webp"];
 const SUPPORTED_NODE_VERSION_RANGE: &str = ">=24.8.0, <25.0.0";
+const RECOMMENDED_MANAGED_NODE_VERSION: &str = "24.8.0";
 const NODE_SMOKE_TEST_SCRIPT: &str = "process.stdout.write('clawy-node-smoke')";
 const NODE_SMOKE_TEST_OUTPUT: &str = "clawy-node-smoke";
 const FULL_MODE_RUNTIME_FLAG: &str = "CLAWY_FULL_MODE_RUNTIME";
@@ -1692,6 +1693,90 @@ fn prepare_managed_openclaw_runtime_dir(root: &Path, expected_version: &str) -> 
     validate_managed_openclaw_runtime_dir(root, Some(expected_version))
 }
 
+fn recommended_openclaw_version() -> Result<String, String> {
+    static VERSION: OnceLock<Option<String>> = OnceLock::new();
+
+    VERSION
+        .get_or_init(|| {
+            let package = serde_json::from_str::<Value>(include_str!("../../package.json")).ok()?;
+            let version = package
+                .get("devDependencies")?
+                .get(OPENCLAW_PACKAGE_NAME)?
+                .as_str()?
+                .trim();
+
+            if version.is_empty() {
+                return None;
+            }
+
+            Some(version.trim_start_matches(['^', '~']).to_string())
+        })
+        .clone()
+        .ok_or_else(|| "Unable to determine the recommended OpenClaw version".into())
+}
+
+fn node_distribution_os() -> Result<&'static str, String> {
+    match std::env::consts::OS {
+        "macos" => Ok("darwin"),
+        "windows" => Ok("win"),
+        "linux" => Ok("linux"),
+        other => Err(format!("Managed Node downloads are not supported on `{other}`")),
+    }
+}
+
+fn node_distribution_arch() -> Result<&'static str, String> {
+    match std::env::consts::ARCH {
+        "aarch64" => Ok("arm64"),
+        "x86_64" => Ok("x64"),
+        other => Err(format!("Managed Node downloads are not supported on `{other}`")),
+    }
+}
+
+fn recommended_node_archive_name(version: &str) -> Result<String, String> {
+    let os = node_distribution_os()?;
+    let arch = node_distribution_arch()?;
+    let extension = if cfg!(windows) { "zip" } else { "tar.gz" };
+
+    Ok(format!("node-v{version}-{os}-{arch}.{extension}"))
+}
+
+fn resolve_recommended_managed_node_payload_with_client(
+    client: &reqwest::blocking::Client,
+) -> Result<ManagedNodeInstallPayload, String> {
+    let version = RECOMMENDED_MANAGED_NODE_VERSION;
+    let archive_name = recommended_node_archive_name(version)?;
+    let shasums_url = format!("https://nodejs.org/dist/v{version}/SHASUMS256.txt");
+
+    let shasums = client
+        .get(&shasums_url)
+        .send()
+        .map_err(|err| format!("Failed to resolve managed Node {version} checksums: {err}"))?
+        .error_for_status()
+        .map_err(|err| format!("Failed to fetch managed Node {version} checksums: {err}"))?
+        .text()
+        .map_err(|err| format!("Failed to read managed Node {version} checksums: {err}"))?;
+
+    let sha256 = shasums
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            let digest = parts.next()?;
+            let file_name = parts.next()?;
+            (file_name == archive_name).then_some(digest.to_string())
+        })
+        .ok_or_else(|| {
+            format!(
+                "Managed Node checksums did not include `{archive_name}` for version {version}"
+            )
+        })?;
+
+    Ok(ManagedNodeInstallPayload {
+        version: version.into(),
+        archive_url: format!("https://nodejs.org/dist/v{version}/{archive_name}"),
+        sha256,
+    })
+}
+
 fn openclaw_registry_release_url(registry_base_url: &str, version: &str) -> String {
     format!(
         "{}/{}/{}",
@@ -2054,6 +2139,12 @@ fn install_managed_node_release(
     install_managed_node_release_in_base(&clawy_base_dir(), payload)
 }
 
+fn install_recommended_managed_node_release() -> Result<ManagedNodeInstallResult, String> {
+    let client = reqwest_client()?;
+    let payload = resolve_recommended_managed_node_payload_with_client(&client)?;
+    install_managed_node_release(&payload)
+}
+
 fn install_managed_openclaw_archive_in_base(
     base_dir: &Path,
     version: &str,
@@ -2167,6 +2258,13 @@ fn install_managed_openclaw_release(
     payload: &ManagedOpenClawInstallPayload,
 ) -> Result<ManagedOpenClawInstallResult, String> {
     install_managed_openclaw_release_in_base(&clawy_base_dir(), payload)
+}
+
+fn install_recommended_managed_openclaw_release() -> Result<ManagedOpenClawInstallResult, String> {
+    let payload = ManagedOpenClawInstallPayload {
+        version: recommended_openclaw_version()?,
+    };
+    install_managed_openclaw_release(&payload)
 }
 
 fn switch_managed_node_version_in_base(
@@ -7402,6 +7500,10 @@ fn invoke_ipc(
                 "result": install_managed_node_release(&payload)?
             }))
         }
+        "runtime:installRecommendedNode" => Ok(json!({
+            "success": true,
+            "result": install_recommended_managed_node_release()?
+        })),
         "runtime:switchManagedNode" => {
             let version = args.get(0).and_then(Value::as_str).unwrap_or_default();
             let pointer = switch_managed_node_version(version)?;
@@ -7421,6 +7523,10 @@ fn invoke_ipc(
                 "result": install_managed_openclaw_release(&payload)?
             }))
         }
+        "runtime:installRecommendedOpenClaw" => Ok(json!({
+            "success": true,
+            "result": install_recommended_managed_openclaw_release()?
+        })),
         "runtime:switchManagedOpenClaw" => {
             let version = args.get(0).and_then(Value::as_str).unwrap_or_default();
             let pointer = switch_managed_openclaw_version(version)?;

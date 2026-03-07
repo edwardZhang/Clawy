@@ -36,23 +36,53 @@
         }
     },
     "runtime": {
-        "title": "環境をチェック中",
+        "title": "ランタイムチェック",
         "viewLogs": "ログを表示",
-        "recheck": "再チェック",
+        "recheck": "すべて再チェック",
+        "recheckCard": "再試行",
         "nodejs": "Node.js ランタイム",
         "openclaw": "OpenClaw パッケージ",
         "gateway": "ゲートウェイサービス",
         "startGateway": "ゲートウェイを起動",
+        "cards": {
+            "node": {
+                "description": "セットアップを続行する前に互換性のある Node.js ランタイムを検出します。"
+            },
+            "openclaw": {
+                "description": "OpenClaw パッケージがインストール済みで起動可能か確認します。"
+            },
+            "gateway": {
+                "description": "ローカルのゲートウェイサービスが起動し、ヘルスチェックに応答できることを確認します。"
+            }
+        },
+        "states": {
+            "idle": "待機中",
+            "checking": "確認中",
+            "success": "準備完了",
+            "error": "要対応"
+        },
         "status": {
-            "checking": "確認中...",
-            "success": "Node.js は利用可能です",
-            "error": "失敗",
+            "checking": "ランタイムの状態を確認しています...",
+            "checkingGateway": "ゲートウェイのヘルスチェックを確認しています...",
             "gatewayRunning": "ポート {{port}} で実行中",
-            "packageReady": "OpenClaw パッケージ準備完了"
+            "gatewayStarting": "ゲートウェイサービスを起動しています...",
+            "gatewayReconnecting": "ゲートウェイに再接続しています...",
+            "gatewayStopped": "ゲートウェイサービスはまだ起動していません。",
+            "gatewayTimedOut": "ゲートウェイの起動がタイムアウトしました。",
+            "gatewayFailed": "ゲートウェイサービスのヘルスチェックに失敗しました。",
+            "waitingForDependencies": "先に Node.js と OpenClaw が通過するのを待っています。",
+            "nodeMissing": "互換性のある Node.js ランタイムが見つかりません。",
+            "openclawMissing": "互換性のある OpenClaw パッケージが見つかりません。",
+            "checkFailed": "確認に失敗しました: {{error}}"
         },
         "issue": {
             "title": "環境の問題が検出されました",
-            "desc": "OpenClawが正しくインストールされていることを確認してください。詳細はログを確認してください。"
+            "desc": "エラーになっているカードを修正し、再チェックしてから続行してください。"
+        },
+        "summary": {
+            "pendingTitle": "ランタイムチェックを続行しています",
+            "pending": "Clawy がランタイム環境を検証しています。3 枚のカードすべてが準備完了になるまで「次へ」は無効のままです。",
+            "readyWhenAllPass": "次のセットアップ手順に進むには、3 枚のカードすべてが「準備完了」になる必要があります。"
         },
         "logs": {
             "title": "アプリケーションログ",
