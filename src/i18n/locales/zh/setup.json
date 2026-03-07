@@ -36,23 +36,53 @@
         }
     },
     "runtime": {
-        "title": "检查环境",
+        "title": "运行时检查",
         "viewLogs": "查看日志",
-        "recheck": "重新检查",
+        "recheck": "重新检查全部",
+        "recheckCard": "重试检查",
         "nodejs": "Node.js 运行时",
         "openclaw": "OpenClaw 包",
         "gateway": "网关服务",
         "startGateway": "启动网关",
+        "cards": {
+            "node": {
+                "description": "在继续设置前检测兼容的 Node.js 运行时。"
+            },
+            "openclaw": {
+                "description": "验证 OpenClaw 包已安装并可启动。"
+            },
+            "gateway": {
+                "description": "确认本地网关服务能够启动并通过健康检查。"
+            }
+        },
+        "states": {
+            "idle": "空闲",
+            "checking": "检查中",
+            "success": "已就绪",
+            "error": "需要处理"
+        },
         "status": {
-            "checking": "检查中...",
-            "success": "Node.js 可用",
-            "error": "失败",
+            "checking": "正在检查运行时状态...",
+            "checkingGateway": "正在检查网关健康状态...",
             "gatewayRunning": "运行在端口 {{port}}",
-            "packageReady": "OpenClaw 包已就绪"
+            "gatewayStarting": "正在启动网关服务...",
+            "gatewayReconnecting": "正在重新连接网关...",
+            "gatewayStopped": "网关服务尚未运行。",
+            "gatewayTimedOut": "网关启动超时。",
+            "gatewayFailed": "网关服务健康检查失败。",
+            "waitingForDependencies": "等待 Node.js 和 OpenClaw 先通过检查。",
+            "nodeMissing": "没有可用的兼容 Node.js 运行时。",
+            "openclawMissing": "没有可用的兼容 OpenClaw 包。",
+            "checkFailed": "检查失败：{{error}}"
         },
         "issue": {
             "title": "检测到环境问题",
-            "desc": "请确保 OpenClaw 已正确安装。查看日志以获取详情。"
+            "desc": "请先修复标记为错误的卡片，然后重新运行检查后再继续。"
+        },
+        "summary": {
+            "pendingTitle": "运行时检查仍在进行中",
+            "pending": "Clawy 正在验证运行时环境。在三个卡片全部就绪前，“下一步”会保持禁用。",
+            "readyWhenAllPass": "必须让三个卡片都显示“已就绪”，才能继续下一步设置。"
         },
         "logs": {
             "title": "应用程序日志",

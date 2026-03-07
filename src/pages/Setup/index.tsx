@@ -3,7 +3,7 @@ import { desktopApi } from '@/lib/desktop/api';
  * Setup Wizard Page
  * First-time setup experience for new users
  */
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useReducer } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -23,10 +23,19 @@ import {
 } from 'lucide-react';
 import { TitleBar } from '@/components/layout/TitleBar';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import {
+  createRuntimeCheckMachineState,
+  runtimeCheckMachineReducer,
+  runtimeChecksReady,
+  runtimePrerequisitesReady,
+  type RuntimeCheckState,
+  type RuntimeCheckStatus,
+} from './runtime-check-machine';
 import { useGatewayStore } from '@/stores/gateway';
 import { useSettingsStore } from '@/stores/settings';
 import { useTranslation } from 'react-i18next';
@@ -352,6 +361,21 @@ interface RuntimeContentProps {
   onStatusChange: (canProceed: boolean) => void;
 }
 
+interface RuntimeStatusPayload {
+  node: {
+    path?: string;
+    source?: 'path' | 'managed' | 'bundled';
+    version?: string;
+    diagnostics?: Array<{ detail?: string }>;
+  };
+  openclaw: {
+    dir?: string;
+    source?: 'managed' | 'nodeModules' | 'bundled';
+    version?: string;
+    diagnostics?: Array<{ detail?: string }>;
+  };
+}
+
 function formatRuntimeSource(source?: 'path' | 'managed' | 'bundled' | 'nodeModules') {
   switch (source) {
     case 'path':
@@ -371,171 +395,296 @@ function firstDiagnosticDetail(diagnostics?: Array<{ detail?: string }>) {
   return diagnostics?.find((diagnostic) => diagnostic.detail)?.detail;
 }
 
+function runtimeCheckBadgeVariant(status: RuntimeCheckStatus) {
+  switch (status) {
+    case 'checking':
+      return 'warning' as const;
+    case 'success':
+      return 'success' as const;
+    case 'error':
+      return 'destructive' as const;
+    case 'idle':
+    default:
+      return 'outline' as const;
+  }
+}
+
+function runtimeCheckStatusIcon(status: RuntimeCheckStatus) {
+  switch (status) {
+    case 'checking':
+      return <Loader2 className="h-4 w-4 animate-spin text-yellow-400" />;
+    case 'success':
+      return <CheckCircle2 className="h-4 w-4 text-green-400" />;
+    case 'error':
+      return <XCircle className="h-4 w-4 text-red-400" />;
+    case 'idle':
+    default:
+      return <AlertCircle className="h-4 w-4 text-slate-400" />;
+  }
+}
+
+interface RuntimeCheckCardProps {
+  title: string;
+  description: string;
+  state: RuntimeCheckState;
+  statusLabel: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  actionDisabled?: boolean;
+}
+
+function RuntimeCheckCard({
+  title,
+  description,
+  state,
+  statusLabel,
+  actionLabel,
+  onAction,
+  actionDisabled,
+}: RuntimeCheckCardProps) {
+  return (
+    <Card
+      className={cn(
+        'border-border/70 transition-colors',
+        state.status === 'success' && 'border-green-500/40 bg-green-500/5',
+        state.status === 'error' && 'border-red-500/40 bg-red-500/5',
+        state.status === 'checking' && 'border-yellow-500/40 bg-yellow-500/5',
+      )}
+    >
+      <CardHeader className="pb-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
+            <CardTitle className="text-base">{title}</CardTitle>
+            <CardDescription>{description}</CardDescription>
+          </div>
+          <Badge variant={runtimeCheckBadgeVariant(state.status)}>{statusLabel}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-start gap-3 rounded-lg bg-muted/50 p-3">
+          <div className="mt-0.5">{runtimeCheckStatusIcon(state.status)}</div>
+          <div className="min-w-0 space-y-1">
+            <p className="text-sm font-medium leading-6 break-words">{state.message}</p>
+            {state.detail && (
+              <p className="text-sm text-muted-foreground break-words">{state.detail}</p>
+            )}
+          </div>
+        </div>
+
+        {state.path && (
+          <div className="rounded-md border border-border/60 bg-background/70 px-3 py-2 font-mono text-xs text-muted-foreground break-all">
+            {state.path}
+          </div>
+        )}
+
+        {actionLabel && onAction && (
+          <div className="flex justify-end">
+            <Button
+              variant={state.status === 'error' ? 'outline' : 'ghost'}
+              size="sm"
+              onClick={onAction}
+              disabled={actionDisabled}
+            >
+              {actionLabel}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const { t } = useTranslation('setup');
   const gatewayStatus = useGatewayStore((state) => state.status);
   const startGateway = useGatewayStore((state) => state.start);
   const checkGatewayHealth = useGatewayStore((state) => state.checkHealth);
 
-  const [checks, setChecks] = useState({
-    nodejs: { status: 'checking' as 'checking' | 'success' | 'error', message: '' },
-    openclaw: { status: 'checking' as 'checking' | 'success' | 'error', message: '' },
-    gateway: { status: 'checking' as 'checking' | 'success' | 'error', message: '' },
-  });
+  const [checks, dispatchChecks] = useReducer(
+    runtimeCheckMachineReducer,
+    undefined,
+    createRuntimeCheckMachineState
+  );
   const [showLogs, setShowLogs] = useState(false);
   const [logContent, setLogContent] = useState('');
-  const [openclawDir, setOpenclawDir] = useState('');
-  const gatewayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const gatewayTimeoutRef = useRef<number | null>(null);
+  const runtimeReady = useMemo(() => runtimePrerequisitesReady(checks), [checks]);
+  const allChecksPassed = useMemo(() => runtimeChecksReady(checks), [checks]);
 
-  const evaluateGatewayAvailability = useCallback(async () => {
+  const evaluateGatewayAvailability = useCallback(async (runtimePrereqsReady: boolean) => {
     const currentGateway = useGatewayStore.getState().status;
+
+    if (!runtimePrereqsReady && currentGateway.state !== 'running') {
+      dispatchChecks({
+        type: 'set',
+        key: 'gateway',
+        patch: {
+          status: 'idle',
+          message: t('runtime.status.waitingForDependencies'),
+        },
+      });
+      return;
+    }
+
+    if (currentGateway.state === 'starting') {
+      dispatchChecks({
+        type: 'set',
+        key: 'gateway',
+        patch: {
+          status: 'checking',
+          message: t('runtime.status.gatewayStarting'),
+        },
+      });
+      return;
+    }
+
+    if (currentGateway.state === 'reconnecting') {
+      dispatchChecks({
+        type: 'set',
+        key: 'gateway',
+        patch: {
+          status: 'checking',
+          message: t('runtime.status.gatewayReconnecting'),
+        },
+      });
+      return;
+    }
+
+    if (currentGateway.state === 'stopped') {
+      dispatchChecks({
+        type: 'set',
+        key: 'gateway',
+        patch: {
+          status: 'error',
+          message: t('runtime.status.gatewayStopped'),
+        },
+      });
+      return;
+    }
 
     try {
       const health = await checkGatewayHealth();
       if (health.ok) {
-        setChecks((prev) => ({
-          ...prev,
-          gateway: {
+        dispatchChecks({
+          type: 'set',
+          key: 'gateway',
+          patch: {
             status: 'success',
             message: t('runtime.status.gatewayRunning', { port: currentGateway.port }),
           },
-        }));
-        return true;
+        });
+        return;
       }
+
+      dispatchChecks({
+        type: 'set',
+        key: 'gateway',
+        patch: {
+          status: 'error',
+          message: health.error || t('runtime.status.gatewayFailed'),
+        },
+      });
+      return;
     } catch {
-      // fall through to status-based handling below
+      dispatchChecks({
+        type: 'set',
+        key: 'gateway',
+        patch: {
+          status: 'error',
+          message: currentGateway.error || t('runtime.status.gatewayFailed'),
+        },
+      });
     }
-
-    if (currentGateway.state === 'error') {
-      setChecks((prev) => ({
-        ...prev,
-        gateway: { status: 'error', message: currentGateway.error || 'Failed to start' },
-      }));
-      return false;
-    }
-
-    setChecks((prev) => ({
-      ...prev,
-      gateway: {
-        status: 'checking',
-        message: currentGateway.state === 'starting' ? t('runtime.status.checking') : 'Waiting for gateway...',
-      },
-    }));
-    return false;
   }, [checkGatewayHealth, t]);
 
   const runChecks = useCallback(async () => {
-    // Reset checks
-    setChecks({
-      nodejs: { status: 'checking', message: '' },
-      openclaw: { status: 'checking', message: '' },
-      gateway: { status: 'checking', message: '' },
+    dispatchChecks({
+      type: 'merge',
+      updates: {
+        nodejs: { status: 'checking', message: t('runtime.status.checking') },
+        openclaw: { status: 'checking', message: t('runtime.status.checking'), path: undefined },
+        gateway: { status: 'idle', message: t('runtime.status.waitingForDependencies') },
+      },
     });
 
     try {
-      const runtimeStatus = await desktopApi.ipcRenderer.invoke('runtime:status') as {
-        node: {
-          path?: string;
-          source?: 'path' | 'managed' | 'bundled';
-          version?: string;
-          diagnostics?: Array<{ detail?: string }>;
-        };
-        openclaw: {
-          dir?: string;
-          source?: 'managed' | 'nodeModules' | 'bundled';
-          version?: string;
-          diagnostics?: Array<{ detail?: string }>;
-        };
-      };
+      const runtimeStatus = await desktopApi.ipcRenderer.invoke('runtime:status') as RuntimeStatusPayload;
+      const nodeReady = Boolean(runtimeStatus.node.path);
+      const openclawReady = Boolean(runtimeStatus.openclaw.dir);
+      const nextRuntimeReady = nodeReady && openclawReady;
 
-      setOpenclawDir(runtimeStatus.openclaw.dir || '');
-
-      if (runtimeStatus.node.path) {
-        setChecks((prev) => ({
-          ...prev,
+      dispatchChecks({
+        type: 'merge',
+        updates: {
           nodejs: {
-            status: 'success',
-            message: `Node.js ready via ${formatRuntimeSource(runtimeStatus.node.source)}${runtimeStatus.node.version ? ` v${runtimeStatus.node.version}` : ''}`,
+            status: nodeReady ? 'success' : 'error',
+            message: nodeReady
+              ? `Node.js ready via ${formatRuntimeSource(runtimeStatus.node.source)}${runtimeStatus.node.version ? ` v${runtimeStatus.node.version}` : ''}`
+              : firstDiagnosticDetail(runtimeStatus.node.diagnostics) || t('runtime.status.nodeMissing'),
           },
-        }));
-      } else {
-        setChecks((prev) => ({
-          ...prev,
-          nodejs: {
-            status: 'error',
-            message: firstDiagnosticDetail(runtimeStatus.node.diagnostics) || 'No compatible Node.js runtime available',
+          openclaw: {
+            status: openclawReady ? 'success' : 'error',
+            message: openclawReady
+              ? `OpenClaw ready via ${formatRuntimeSource(runtimeStatus.openclaw.source)}${runtimeStatus.openclaw.version ? ` v${runtimeStatus.openclaw.version}` : ''}`
+              : firstDiagnosticDetail(runtimeStatus.openclaw.diagnostics) || t('runtime.status.openclawMissing'),
+            path: runtimeStatus.openclaw.dir || undefined,
           },
-        }));
-      }
+          gateway: nextRuntimeReady
+            ? { status: 'checking', message: t('runtime.status.checkingGateway') }
+            : { status: 'idle', message: t('runtime.status.waitingForDependencies') },
+        },
+      });
 
-      if (runtimeStatus.openclaw.dir) {
-        setChecks((prev) => ({
-          ...prev,
-          openclaw: {
-            status: 'success',
-            message: `OpenClaw ready via ${formatRuntimeSource(runtimeStatus.openclaw.source)}${runtimeStatus.openclaw.version ? ` v${runtimeStatus.openclaw.version}` : ''}`,
-          },
-        }));
-      } else {
-        setChecks((prev) => ({
-          ...prev,
-          openclaw: {
-            status: 'error',
-            message: firstDiagnosticDetail(runtimeStatus.openclaw.diagnostics) || 'No compatible OpenClaw runtime available',
-          },
-        }));
-      }
+      await evaluateGatewayAvailability(nextRuntimeReady);
     } catch (error) {
-      setChecks((prev) => ({
-        ...prev,
-        nodejs: { status: 'error', message: `Check failed: ${error}` },
-        openclaw: { status: 'error', message: `Check failed: ${error}` },
-      }));
+      const message = error instanceof Error ? error.message : String(error);
+      dispatchChecks({
+        type: 'merge',
+        updates: {
+          nodejs: {
+            status: 'error',
+            message: t('runtime.status.checkFailed', { error: message }),
+          },
+          openclaw: {
+            status: 'error',
+            message: t('runtime.status.checkFailed', { error: message }),
+          },
+          gateway: {
+            status: 'idle',
+            message: t('runtime.status.waitingForDependencies'),
+          },
+        },
+      });
     }
-
-    // Check Gateway — read directly from store to avoid stale closure
-    // Don't immediately report error; gateway may still be initializing
-    await evaluateGatewayAvailability();
-  }, [evaluateGatewayAvailability]);
+  }, [evaluateGatewayAvailability, t]);
 
   useEffect(() => {
-    runChecks();
+    void runChecks();
   }, [runChecks]);
 
-  // Update canProceed when gateway status changes
   useEffect(() => {
-    const allPassed = checks.nodejs.status === 'success'
-      && checks.openclaw.status === 'success'
-      && (checks.gateway.status === 'success' || gatewayStatus.state === 'running');
-    onStatusChange(allPassed);
-  }, [checks, gatewayStatus, onStatusChange]);
-
-  // Update gateway check when gateway status changes
-  useEffect(() => {
-    if (gatewayStatus.state === 'running') {
-      setChecks((prev) => ({
-        ...prev,
-        gateway: { status: 'success', message: t('runtime.status.gatewayRunning', { port: gatewayStatus.port }) },
-      }));
-    } else if (gatewayStatus.state === 'error') {
-      setChecks((prev) => ({
-        ...prev,
-        gateway: { status: 'error', message: gatewayStatus.error || 'Failed to start' },
-      }));
-    } else if (gatewayStatus.state === 'starting' || gatewayStatus.state === 'reconnecting' || gatewayStatus.state === 'stopped') {
-      void evaluateGatewayAvailability();
-    }
-  }, [evaluateGatewayAvailability, gatewayStatus, t]);
+    onStatusChange(allChecksPassed);
+  }, [allChecksPassed, onStatusChange]);
 
   useEffect(() => {
-    if (checks.gateway.status !== 'checking') {
+    void evaluateGatewayAvailability(runtimeReady);
+  }, [
+    evaluateGatewayAvailability,
+    gatewayStatus.error,
+    gatewayStatus.port,
+    gatewayStatus.state,
+    runtimeReady,
+  ]);
+
+  useEffect(() => {
+    if (checks.checks.gateway.status !== 'checking' || !runtimeReady) {
       return;
     }
 
     let cancelled = false;
     const poll = async () => {
       if (cancelled) return;
-      await evaluateGatewayAvailability();
+      await evaluateGatewayAvailability(true);
     };
 
     void poll();
@@ -547,46 +696,46 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [checks.gateway.status, evaluateGatewayAvailability]);
+  }, [checks.checks.gateway.status, evaluateGatewayAvailability, runtimeReady]);
 
-  // Gateway startup timeout — show error only after giving enough time to initialize
   useEffect(() => {
     if (gatewayTimeoutRef.current) {
-      clearTimeout(gatewayTimeoutRef.current);
+      window.clearTimeout(gatewayTimeoutRef.current);
       gatewayTimeoutRef.current = null;
     }
 
-    // If gateway is already in a terminal state, no timeout needed
-    if (gatewayStatus.state === 'running' || gatewayStatus.state === 'error') {
+    if (!runtimeReady || (gatewayStatus.state !== 'starting' && gatewayStatus.state !== 'reconnecting')) {
       return;
     }
 
-    // Set timeout for non-terminal states (stopped, starting, reconnecting)
-    gatewayTimeoutRef.current = setTimeout(() => {
-      setChecks((prev) => {
-        if (prev.gateway.status === 'checking') {
-          return {
-            ...prev,
-            gateway: { status: 'error', message: 'Gateway startup timed out' },
-          };
-        }
-        return prev;
+    gatewayTimeoutRef.current = window.setTimeout(() => {
+      dispatchChecks({
+        type: 'set',
+        key: 'gateway',
+        patch: {
+          status: 'error',
+          message: t('runtime.status.gatewayTimedOut'),
+        },
       });
-    }, 600 * 1000); // 600 seconds — enough for gateway to fully initialize
+    }, 600 * 1000);
 
     return () => {
       if (gatewayTimeoutRef.current) {
-        clearTimeout(gatewayTimeoutRef.current);
+        window.clearTimeout(gatewayTimeoutRef.current);
         gatewayTimeoutRef.current = null;
       }
     };
-  }, [gatewayStatus.state]);
+  }, [gatewayStatus.state, runtimeReady, t]);
 
   const handleStartGateway = async () => {
-    setChecks((prev) => ({
-      ...prev,
-      gateway: { status: 'checking', message: 'Starting...' },
-    }));
+    dispatchChecks({
+      type: 'set',
+      key: 'gateway',
+      patch: {
+        status: 'checking',
+        message: t('runtime.status.gatewayStarting'),
+      },
+    });
     await startGateway();
   };
 
@@ -612,46 +761,17 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     }
   };
 
-  const ERROR_TRUNCATE_LEN = 30;
-
-  const renderStatus = (status: 'checking' | 'success' | 'error', message: string) => {
-    if (status === 'checking') {
-      return (
-        <span className="flex items-center gap-2 text-yellow-400 whitespace-nowrap">
-          <Loader2 className="h-5 w-5 flex-shrink-0 animate-spin" />
-          {message || 'Checking...'}
-        </span>
-      );
-    }
-    if (status === 'success') {
-      return (
-        <span className="flex items-center gap-2 text-green-400 whitespace-nowrap">
-          <CheckCircle2 className="h-5 w-5 flex-shrink-0" />
-          {message}
-        </span>
-      );
-    }
-
-    const isLong = message.length > ERROR_TRUNCATE_LEN;
-    const displayMsg = isLong ? message.slice(0, ERROR_TRUNCATE_LEN) : message;
-
-    return (
-      <span className="flex items-center gap-2 text-red-400 whitespace-nowrap">
-        <XCircle className="h-5 w-5 flex-shrink-0" />
-        <span>{displayMsg}</span>
-        {isLong && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="cursor-pointer text-red-300 hover:text-red-200 font-medium">...</span>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-sm whitespace-normal break-words text-xs">
-              {message}
-            </TooltipContent>
-          </Tooltip>
-        )}
-      </span>
-    );
-  };
+  const checkValues = useMemo(() => Object.values(checks.checks), [checks.checks]);
+  const hasError = checkValues.some((check) => check.status === 'error');
+  const hasChecking = checkValues.some((check) => check.status === 'checking');
+  const gatewayActionLabel = runtimeReady && checks.checks.gateway.status === 'error'
+    ? t('runtime.startGateway')
+    : t('runtime.recheckCard');
+  const gatewayAction = runtimeReady && checks.checks.gateway.status === 'error'
+    ? handleStartGateway
+    : () => {
+        void runChecks();
+      };
 
   return (
     <div className="space-y-4">
@@ -661,55 +781,66 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
           <Button variant="ghost" size="sm" onClick={handleShowLogs}>
             {t('runtime.viewLogs')}
           </Button>
-          <Button variant="ghost" size="sm" onClick={runChecks}>
+          <Button variant="ghost" size="sm" onClick={() => void runChecks()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             {t('runtime.recheck')}
           </Button>
         </div>
       </div>
-      <div className="space-y-3">
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4 p-3 rounded-lg bg-muted/50">
-          <span className="text-left">{t('runtime.nodejs')}</span>
-          <div className="flex justify-end">
-            {renderStatus(checks.nodejs.status, checks.nodejs.message)}
-          </div>
-        </div>
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4 p-3 rounded-lg bg-muted/50">
-          <div className="text-left min-w-0">
-            <span>{t('runtime.openclaw')}</span>
-            {openclawDir && (
-              <p className="text-xs text-muted-foreground mt-0.5 font-mono break-all">
-                {openclawDir}
-              </p>
-            )}
-          </div>
-          <div className="flex justify-end self-start mt-0.5">
-            {renderStatus(checks.openclaw.status, checks.openclaw.message)}
-          </div>
-        </div>
-        <div className="grid grid-cols-[1fr_auto] items-center gap-4 p-3 rounded-lg bg-muted/50">
-          <div className="flex items-center gap-2 text-left">
-            <span>Gateway Service</span>
-            {checks.gateway.status === 'error' && (
-              <Button variant="outline" size="sm" onClick={handleStartGateway}>
-                Start Gateway
-              </Button>
-            )}
-          </div>
-          <div className="flex justify-end">
-            {renderStatus(checks.gateway.status, checks.gateway.message)}
-          </div>
-        </div>
+      <div className="grid gap-4">
+        <RuntimeCheckCard
+          title={t('runtime.nodejs')}
+          description={t('runtime.cards.node.description')}
+          state={checks.checks.nodejs}
+          statusLabel={t(`runtime.states.${checks.checks.nodejs.status}`)}
+          actionLabel={t('runtime.recheckCard')}
+          onAction={() => void runChecks()}
+          actionDisabled={checks.checks.nodejs.status === 'checking'}
+        />
+        <RuntimeCheckCard
+          title={t('runtime.openclaw')}
+          description={t('runtime.cards.openclaw.description')}
+          state={checks.checks.openclaw}
+          statusLabel={t(`runtime.states.${checks.checks.openclaw.status}`)}
+          actionLabel={t('runtime.recheckCard')}
+          onAction={() => void runChecks()}
+          actionDisabled={checks.checks.openclaw.status === 'checking'}
+        />
+        <RuntimeCheckCard
+          title={t('runtime.gateway')}
+          description={t('runtime.cards.gateway.description')}
+          state={checks.checks.gateway}
+          statusLabel={t(`runtime.states.${checks.checks.gateway.status}`)}
+          actionLabel={gatewayActionLabel}
+          onAction={gatewayAction}
+          actionDisabled={checks.checks.gateway.status === 'checking'}
+        />
       </div>
 
-      {(checks.nodejs.status === 'error' || checks.openclaw.status === 'error') && (
-        <div className="mt-4 p-4 rounded-lg bg-red-900/20 border border-red-500/20">
+      {!allChecksPassed && (
+        <div
+          className={cn(
+            'mt-4 rounded-lg border p-4',
+            hasError && 'border-red-500/20 bg-red-900/20',
+            !hasError && 'border-yellow-500/20 bg-yellow-900/20',
+          )}
+        >
           <div className="flex items-start gap-2">
-            <AlertCircle className="h-5 w-5 text-red-400 mt-0.5" />
+            {hasError ? (
+              <AlertCircle className="mt-0.5 h-5 w-5 text-red-400" />
+            ) : (
+              <Loader2 className="mt-0.5 h-5 w-5 animate-spin text-yellow-400" />
+            )}
             <div>
-              <p className="font-medium text-red-400">{t('runtime.issue.title')}</p>
+              <p className={cn('font-medium', hasError ? 'text-red-400' : 'text-yellow-400')}>
+                {hasError ? t('runtime.issue.title') : t('runtime.summary.pendingTitle')}
+              </p>
               <p className="text-sm text-muted-foreground mt-1">
-                {t('runtime.issue.desc')}
+                {hasError
+                  ? t('runtime.issue.desc')
+                  : hasChecking
+                    ? t('runtime.summary.pending')
+                    : t('runtime.summary.readyWhenAllPass')}
               </p>
             </div>
           </div>
@@ -720,19 +851,19 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       {showLogs && (
         <div className="mt-4 p-4 rounded-lg bg-black/40 border border-border">
           <div className="flex items-center justify-between mb-2">
-            <p className="font-medium text-foreground text-sm">Application Logs</p>
+            <p className="font-medium text-foreground text-sm">{t('runtime.logs.title')}</p>
             <div className="flex gap-2">
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleOpenLogDir}>
                 <ExternalLink className="h-3 w-3 mr-1" />
-                Open Log Folder
+                {t('runtime.logs.openFolder')}
               </Button>
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowLogs(false)}>
-                Close
+                {t('runtime.logs.close')}
               </Button>
             </div>
           </div>
           <pre className="text-xs text-slate-300 bg-black/50 p-3 rounded max-h-60 overflow-auto whitespace-pre-wrap font-mono">
-            {logContent || '(No logs available yet)'}
+            {logContent || t('runtime.logs.noLogs')}
           </pre>
         </div>
       )}

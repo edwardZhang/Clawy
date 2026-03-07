@@ -36,23 +36,53 @@
         }
     },
     "runtime": {
-        "title": "Checking Environment",
+        "title": "Runtime Check",
         "viewLogs": "View Logs",
-        "recheck": "Re-check",
+        "recheck": "Re-check All",
+        "recheckCard": "Retry Check",
         "nodejs": "Node.js Runtime",
         "openclaw": "OpenClaw Package",
         "gateway": "Gateway Service",
         "startGateway": "Start Gateway",
+        "cards": {
+            "node": {
+                "description": "Detect a compatible Node.js runtime before setup continues."
+            },
+            "openclaw": {
+                "description": "Verify the OpenClaw package is installed and ready to launch."
+            },
+            "gateway": {
+                "description": "Confirm the local Gateway Service can start and answer health checks."
+            }
+        },
+        "states": {
+            "idle": "Idle",
+            "checking": "Checking",
+            "success": "Ready",
+            "error": "Needs attention"
+        },
         "status": {
-            "checking": "Checking...",
-            "success": "Node.js is available",
-            "error": "Failed",
+            "checking": "Checking runtime status...",
+            "checkingGateway": "Checking gateway health...",
             "gatewayRunning": "Running on port {{port}}",
-            "packageReady": "OpenClaw package ready"
+            "gatewayStarting": "Starting gateway service...",
+            "gatewayReconnecting": "Reconnecting to gateway...",
+            "gatewayStopped": "Gateway service is not running yet.",
+            "gatewayTimedOut": "Gateway startup timed out.",
+            "gatewayFailed": "Gateway service failed its health check.",
+            "waitingForDependencies": "Waiting for Node.js and OpenClaw to pass first.",
+            "nodeMissing": "No compatible Node.js runtime is available.",
+            "openclawMissing": "No compatible OpenClaw package is available.",
+            "checkFailed": "Check failed: {{error}}"
         },
         "issue": {
             "title": "Environment issue detected",
-            "desc": "Please ensure OpenClaw is properly installed. Check the logs for details."
+            "desc": "Fix the card marked with an error, then re-run the checks before continuing."
+        },
+        "summary": {
+            "pendingTitle": "Runtime checks are still in progress",
+            "pending": "Clawy is still validating the runtime environment. Next stays disabled until all three cards are ready.",
+            "readyWhenAllPass": "All three cards must show Ready before you can continue to the next setup step."
         },
         "logs": {
             "title": "Application Logs",
