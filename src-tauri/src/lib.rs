@@ -9,6 +9,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -32,11 +33,17 @@ const MANAGED_RUNTIME_SCHEMA_VERSION: u32 = 1;
 #[allow(dead_code)]
 const MANAGED_RUNTIME_DIR_NAME: &str = "runtime";
 #[allow(dead_code)]
+const MANAGED_RUNTIME_DOWNLOADS_DIR_NAME: &str = "downloads";
+#[allow(dead_code)]
 const MANAGED_RUNTIME_VERSIONS_DIR_NAME: &str = "versions";
+#[allow(dead_code)]
+const MANAGED_RUNTIME_STAGING_DIR_NAME: &str = "staging";
 #[allow(dead_code)]
 const MANAGED_RUNTIME_STATE_FILE_NAME: &str = "runtime-state.json";
 #[allow(dead_code)]
 const MANAGED_RUNTIME_MANIFEST_FILE_NAME: &str = "manifest.json";
+#[allow(dead_code)]
+const MANAGED_RUNTIME_CURRENT_POINTER_FILE_NAME: &str = "current";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -281,6 +288,13 @@ impl Default for ManagedRuntimeState {
 
 #[allow(dead_code)]
 impl ManagedRuntimeState {
+    fn registry(&self, kind: ManagedRuntimeKind) -> &ManagedRuntimeRegistry {
+        match kind {
+            ManagedRuntimeKind::Node => &self.node,
+            ManagedRuntimeKind::OpenClaw => &self.openclaw,
+        }
+    }
+
     fn registry_mut(&mut self, kind: ManagedRuntimeKind) -> &mut ManagedRuntimeRegistry {
         match kind {
             ManagedRuntimeKind::Node => &mut self.node,
@@ -332,6 +346,7 @@ impl ManagedRuntimeManifest {
 #[serde(rename_all = "camelCase")]
 enum NodeBinarySource {
     Path,
+    Managed,
     Bundled,
 }
 
@@ -339,9 +354,29 @@ impl NodeBinarySource {
     fn as_str(self) -> &'static str {
         match self {
             Self::Path => "path",
+            Self::Managed => "managed",
             Self::Bundled => "bundled",
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedNodeInstallPayload {
+    version: String,
+    #[serde(alias = "url")]
+    archive_url: String,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ManagedNodeInstallResult {
+    version: String,
+    archive_path: PathBuf,
+    runtime_dir: PathBuf,
+    manifest_path: PathBuf,
+    current_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -744,6 +779,16 @@ fn managed_runtime_root_dir() -> PathBuf {
 }
 
 #[allow(dead_code)]
+fn managed_runtime_downloads_dir_from_base(base_dir: &Path) -> PathBuf {
+    managed_runtime_root_dir_from_base(base_dir).join(MANAGED_RUNTIME_DOWNLOADS_DIR_NAME)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_downloads_dir() -> PathBuf {
+    managed_runtime_downloads_dir_from_base(&clawy_base_dir())
+}
+
+#[allow(dead_code)]
 fn managed_runtime_dir_from_base(base_dir: &Path, kind: ManagedRuntimeKind) -> PathBuf {
     managed_runtime_root_dir_from_base(base_dir).join(kind.dir_name())
 }
@@ -764,6 +809,16 @@ fn managed_runtime_versions_dir(kind: ManagedRuntimeKind) -> PathBuf {
 }
 
 #[allow(dead_code)]
+fn managed_runtime_staging_dir_from_base(base_dir: &Path, kind: ManagedRuntimeKind) -> PathBuf {
+    managed_runtime_dir_from_base(base_dir, kind).join(MANAGED_RUNTIME_STAGING_DIR_NAME)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_staging_dir(kind: ManagedRuntimeKind) -> PathBuf {
+    managed_runtime_staging_dir_from_base(&clawy_base_dir(), kind)
+}
+
+#[allow(dead_code)]
 fn managed_runtime_version_dir_from_base(
     base_dir: &Path,
     kind: ManagedRuntimeKind,
@@ -775,6 +830,19 @@ fn managed_runtime_version_dir_from_base(
 #[allow(dead_code)]
 fn managed_runtime_version_dir(kind: ManagedRuntimeKind, version: &str) -> PathBuf {
     managed_runtime_version_dir_from_base(&clawy_base_dir(), kind, version)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_current_pointer_path_from_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+) -> PathBuf {
+    managed_runtime_dir_from_base(base_dir, kind).join(MANAGED_RUNTIME_CURRENT_POINTER_FILE_NAME)
+}
+
+#[allow(dead_code)]
+fn managed_runtime_current_pointer_path(kind: ManagedRuntimeKind) -> PathBuf {
+    managed_runtime_current_pointer_path_from_base(&clawy_base_dir(), kind)
 }
 
 #[allow(dead_code)]
@@ -975,6 +1043,496 @@ where
     }
     let content = serde_json::to_string_pretty(value).map_err(|err| err.to_string())?;
     fs::write(path, content).map_err(|err| err.to_string())
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    if path.is_dir() {
+        fs::remove_dir_all(path).map_err(|err| err.to_string())
+    } else {
+        fs::remove_file(path).map_err(|err| err.to_string())
+    }
+}
+
+fn write_text_atomically(path: &Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        ensure_dir(parent)?;
+    }
+
+    let file_name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "pointer".into());
+    let temp_path = path.with_file_name(format!(".{file_name}.{}", Uuid::new_v4().simple()));
+
+    fs::write(&temp_path, contents).map_err(|err| err.to_string())?;
+    if path.exists() {
+        remove_path_if_exists(path)?;
+    }
+    fs::rename(&temp_path, path).map_err(|err| err.to_string())
+}
+
+fn normalized_sha256_hex(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("Managed Node archive SHA-256 must be a 64-character hex string".into());
+    }
+
+    Ok(normalized)
+}
+
+fn sha256_digest_file(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|err| err.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let read = file.read(&mut buffer).map_err(|err| err.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
+    let expected = normalized_sha256_hex(expected_sha256)?;
+    let actual = sha256_digest_file(path)?;
+    if actual == expected {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Managed Node archive checksum mismatch for {}: expected {expected}, got {actual}",
+        path.to_string_lossy()
+    ))
+}
+
+fn file_name_from_url(url: &str) -> Result<String, String> {
+    let sanitized = url.split('#').next().unwrap_or(url);
+    let without_query = sanitized.split('?').next().unwrap_or(sanitized);
+    let file_name = without_query.rsplit('/').next().unwrap_or_default().trim();
+
+    if file_name.is_empty() {
+        return Err(format!(
+            "Could not derive archive file name from URL `{url}`"
+        ));
+    }
+
+    Ok(file_name.to_string())
+}
+
+fn managed_node_binary_relative_path() -> &'static str {
+    if cfg!(windows) {
+        "node.exe"
+    } else {
+        "bin/node"
+    }
+}
+
+fn managed_node_binary_path_for_version_from_base(base_dir: &Path, version: &str) -> PathBuf {
+    managed_runtime_version_dir_from_base(base_dir, ManagedRuntimeKind::Node, version)
+        .join(managed_node_binary_relative_path())
+}
+
+fn managed_runtime_current_version_from_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+) -> Option<String> {
+    let pointer_path = managed_runtime_current_pointer_path_from_base(base_dir, kind);
+    if let Ok(contents) = fs::read_to_string(&pointer_path) {
+        let version = contents.trim();
+        if !version.is_empty() {
+            return Some(version.to_string());
+        }
+    }
+
+    load_managed_runtime_state_from_base(base_dir)
+        .registry(kind)
+        .current
+        .as_ref()
+        .map(|pointer| pointer.version.clone())
+}
+
+fn managed_node_binary_path_from_base(base_dir: &Path) -> Option<PathBuf> {
+    let version = managed_runtime_current_version_from_base(base_dir, ManagedRuntimeKind::Node)?;
+    let path = managed_node_binary_path_for_version_from_base(base_dir, &version);
+    path.exists().then_some(path)
+}
+
+fn managed_node_binary_path() -> Option<PathBuf> {
+    managed_node_binary_path_from_base(&clawy_base_dir())
+}
+
+#[cfg(unix)]
+fn ensure_unix_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .map_err(|err| err.to_string())?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).map_err(|err| err.to_string())
+}
+
+#[cfg(not(unix))]
+fn ensure_unix_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+fn extract_zip_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    let archive_file = File::open(archive_path).map_err(|err| err.to_string())?;
+    let mut archive =
+        zip::ZipArchive::new(archive_file).map_err(|err| format!("Invalid zip archive: {err}"))?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|err| format!("Failed to read zip entry #{index}: {err}"))?;
+        let enclosed_name = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("Zip archive contains an unsafe path: {}", entry.name()))?;
+        let output_path = destination.join(enclosed_name);
+
+        if entry.is_dir() {
+            ensure_dir(&output_path)?;
+            continue;
+        }
+
+        if let Some(parent) = output_path.parent() {
+            ensure_dir(parent)?;
+        }
+
+        let mut output = File::create(&output_path).map_err(|err| err.to_string())?;
+        std::io::copy(&mut entry, &mut output).map_err(|err| err.to_string())?;
+
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&output_path, fs::Permissions::from_mode(mode))
+                .map_err(|err| err.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn extract_tar_gz_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    let archive_file = File::open(archive_path).map_err(|err| err.to_string())?;
+    let decoder = flate2::read::GzDecoder::new(archive_file);
+    let mut archive = tar::Archive::new(decoder);
+
+    for entry in archive.entries().map_err(|err| err.to_string())? {
+        let mut entry = entry.map_err(|err| err.to_string())?;
+        entry
+            .unpack_in(destination)
+            .map_err(|err| err.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn extract_tar_xz_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    let archive_file = File::open(archive_path).map_err(|err| err.to_string())?;
+    let decoder = xz2::read::XzDecoder::new(archive_file);
+    let mut archive = tar::Archive::new(decoder);
+
+    for entry in archive.entries().map_err(|err| err.to_string())? {
+        let mut entry = entry.map_err(|err| err.to_string())?;
+        entry
+            .unpack_in(destination)
+            .map_err(|err| err.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn extract_archive_to_dir(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    ensure_dir(destination)?;
+    let archive_name = file_name_from_path(archive_path).to_ascii_lowercase();
+
+    if archive_name.ends_with(".zip") {
+        return extract_zip_archive(archive_path, destination);
+    }
+    if archive_name.ends_with(".tar.gz") || archive_name.ends_with(".tgz") {
+        return extract_tar_gz_archive(archive_path, destination);
+    }
+    if archive_name.ends_with(".tar.xz") {
+        return extract_tar_xz_archive(archive_path, destination);
+    }
+
+    Err(format!(
+        "Unsupported managed Node archive format: {}",
+        archive_path.to_string_lossy()
+    ))
+}
+
+fn collapse_single_extracted_root_directory(root: &Path) -> Result<(), String> {
+    let entries = fs::read_dir(root)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+
+    if entries.len() != 1 {
+        return Ok(());
+    }
+
+    let nested = entries[0].path();
+    if !nested.is_dir() {
+        return Ok(());
+    }
+
+    for child in fs::read_dir(&nested).map_err(|err| err.to_string())? {
+        let child = child.map_err(|err| err.to_string())?;
+        fs::rename(child.path(), root.join(child.file_name())).map_err(|err| err.to_string())?;
+    }
+
+    fs::remove_dir(&nested).map_err(|err| err.to_string())
+}
+
+fn prepare_managed_node_runtime_dir(root: &Path) -> Result<(), String> {
+    collapse_single_extracted_root_directory(root)?;
+
+    let node_binary = root.join(managed_node_binary_relative_path());
+    if !node_binary.exists() {
+        return Err(format!(
+            "Managed Node archive did not produce `{}` under {}",
+            managed_node_binary_relative_path(),
+            root.to_string_lossy()
+        ));
+    }
+
+    ensure_unix_executable(&node_binary)
+}
+
+fn download_managed_node_archive_with_client_in_base(
+    base_dir: &Path,
+    client: &reqwest::blocking::Client,
+    payload: &ManagedNodeInstallPayload,
+) -> Result<PathBuf, String> {
+    let version = payload.version.trim();
+    if version.is_empty() {
+        return Err("Managed Node version is required".into());
+    }
+
+    let file_name = file_name_from_url(&payload.archive_url)?;
+    let downloads_dir = managed_runtime_downloads_dir_from_base(base_dir);
+    ensure_dir(&downloads_dir)?;
+
+    let destination = downloads_dir.join(&file_name);
+    if destination.exists() {
+        match verify_file_sha256(&destination, &payload.sha256) {
+            Ok(()) => return Ok(destination),
+            Err(_) => remove_path_if_exists(&destination)?,
+        }
+    }
+
+    let temp_path = downloads_dir.join(format!(".{file_name}.{}", Uuid::new_v4().simple()));
+    let response = client
+        .get(&payload.archive_url)
+        .send()
+        .map_err(|err| format!("Failed to download managed Node archive: {err}"))?
+        .error_for_status()
+        .map_err(|err| format!("Managed Node archive download failed: {err}"))?;
+
+    let mut response = response;
+    let mut output = File::create(&temp_path).map_err(|err| err.to_string())?;
+    let download_result = std::io::copy(&mut response, &mut output).map_err(|err| err.to_string());
+    output.flush().map_err(|err| err.to_string())?;
+
+    if let Err(err) = download_result {
+        let _ = remove_path_if_exists(&temp_path);
+        return Err(err);
+    }
+
+    if let Err(err) = verify_file_sha256(&temp_path, &payload.sha256) {
+        let _ = remove_path_if_exists(&temp_path);
+        return Err(err);
+    }
+
+    if destination.exists() {
+        remove_path_if_exists(&destination)?;
+    }
+    fs::rename(&temp_path, &destination).map_err(|err| err.to_string())?;
+
+    Ok(destination)
+}
+
+fn download_managed_node_archive_in_base(
+    base_dir: &Path,
+    payload: &ManagedNodeInstallPayload,
+) -> Result<PathBuf, String> {
+    let client = reqwest_client_with_timeout(Duration::from_secs(300))?;
+    download_managed_node_archive_with_client_in_base(base_dir, &client, payload)
+}
+
+fn activate_managed_runtime_version_in_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+    version: &str,
+) -> Result<ManagedRuntimeVersionPointer, String> {
+    let trimmed_version = version.trim();
+    if trimmed_version.is_empty() {
+        return Err("Managed runtime version is required".into());
+    }
+
+    let runtime_dir = managed_runtime_version_dir_from_base(base_dir, kind, trimmed_version);
+    if !runtime_dir.exists() {
+        return Err(format!(
+            "Managed runtime version {} is not installed at {}",
+            trimmed_version,
+            runtime_dir.to_string_lossy()
+        ));
+    }
+
+    if kind == ManagedRuntimeKind::Node {
+        let node_binary = managed_node_binary_path_for_version_from_base(base_dir, trimmed_version);
+        if !node_binary.exists() {
+            return Err(format!(
+                "Managed Node binary is missing at {}",
+                node_binary.to_string_lossy()
+            ));
+        }
+        ensure_unix_executable(&node_binary)?;
+    }
+
+    load_or_create_managed_runtime_manifest_in_base(base_dir, kind, trimmed_version)?;
+
+    let mut state = load_or_create_managed_runtime_state_in_base(base_dir)?;
+    state.set_current_version(kind, trimmed_version);
+    save_managed_runtime_state_to_base(base_dir, &state)?;
+
+    write_text_atomically(
+        &managed_runtime_current_pointer_path_from_base(base_dir, kind),
+        &format!("{trimmed_version}\n"),
+    )?;
+
+    Ok(ManagedRuntimeVersionPointer::new(kind, trimmed_version))
+}
+
+fn install_managed_node_archive_in_base(
+    base_dir: &Path,
+    version: &str,
+    archive_path: &Path,
+) -> Result<ManagedNodeInstallResult, String> {
+    let trimmed_version = version.trim();
+    if trimmed_version.is_empty() {
+        return Err("Managed Node version is required".into());
+    }
+
+    let runtime_dir =
+        managed_runtime_version_dir_from_base(base_dir, ManagedRuntimeKind::Node, trimmed_version);
+    if runtime_dir.exists() {
+        load_or_create_managed_runtime_manifest_in_base(
+            base_dir,
+            ManagedRuntimeKind::Node,
+            trimmed_version,
+        )?;
+        activate_managed_runtime_version_in_base(
+            base_dir,
+            ManagedRuntimeKind::Node,
+            trimmed_version,
+        )?;
+
+        return Ok(ManagedNodeInstallResult {
+            version: trimmed_version.to_string(),
+            archive_path: archive_path.to_path_buf(),
+            runtime_dir: runtime_dir.clone(),
+            manifest_path: managed_runtime_manifest_path_from_base(
+                base_dir,
+                ManagedRuntimeKind::Node,
+                trimmed_version,
+            ),
+            current_path: managed_runtime_current_pointer_path_from_base(
+                base_dir,
+                ManagedRuntimeKind::Node,
+            ),
+        });
+    }
+
+    let staging_dir = managed_runtime_staging_dir_from_base(base_dir, ManagedRuntimeKind::Node)
+        .join(format!("{trimmed_version}-{}", Uuid::new_v4().simple()));
+    ensure_dir(&staging_dir)?;
+
+    if let Err(err) = extract_archive_to_dir(archive_path, &staging_dir)
+        .and_then(|_| prepare_managed_node_runtime_dir(&staging_dir))
+        .and_then(|_| {
+            write_json(
+                &staging_dir.join(MANAGED_RUNTIME_MANIFEST_FILE_NAME),
+                &ManagedRuntimeManifest::new(ManagedRuntimeKind::Node, trimmed_version),
+            )
+        })
+    {
+        let _ = remove_path_if_exists(&staging_dir);
+        return Err(err);
+    }
+
+    ensure_dir(&managed_runtime_versions_dir_from_base(
+        base_dir,
+        ManagedRuntimeKind::Node,
+    ))?;
+
+    match fs::rename(&staging_dir, &runtime_dir) {
+        Ok(()) => {}
+        Err(err) if runtime_dir.exists() => {
+            let _ = remove_path_if_exists(&staging_dir);
+            if !managed_node_binary_path_for_version_from_base(base_dir, trimmed_version).exists() {
+                return Err(err.to_string());
+            }
+        }
+        Err(err) => {
+            let _ = remove_path_if_exists(&staging_dir);
+            return Err(err.to_string());
+        }
+    }
+
+    activate_managed_runtime_version_in_base(base_dir, ManagedRuntimeKind::Node, trimmed_version)?;
+
+    Ok(ManagedNodeInstallResult {
+        version: trimmed_version.to_string(),
+        archive_path: archive_path.to_path_buf(),
+        runtime_dir: runtime_dir.clone(),
+        manifest_path: managed_runtime_manifest_path_from_base(
+            base_dir,
+            ManagedRuntimeKind::Node,
+            trimmed_version,
+        ),
+        current_path: managed_runtime_current_pointer_path_from_base(
+            base_dir,
+            ManagedRuntimeKind::Node,
+        ),
+    })
+}
+
+fn install_managed_node_release_in_base(
+    base_dir: &Path,
+    payload: &ManagedNodeInstallPayload,
+) -> Result<ManagedNodeInstallResult, String> {
+    let archive_path = download_managed_node_archive_in_base(base_dir, payload)?;
+    install_managed_node_archive_in_base(base_dir, &payload.version, &archive_path)
+}
+
+fn install_managed_node_release(
+    payload: &ManagedNodeInstallPayload,
+) -> Result<ManagedNodeInstallResult, String> {
+    install_managed_node_release_in_base(&clawy_base_dir(), payload)
+}
+
+fn switch_managed_node_version_in_base(
+    base_dir: &Path,
+    version: &str,
+) -> Result<ManagedRuntimeVersionPointer, String> {
+    activate_managed_runtime_version_in_base(base_dir, ManagedRuntimeKind::Node, version)
+}
+
+fn switch_managed_node_version(version: &str) -> Result<ManagedRuntimeVersionPointer, String> {
+    switch_managed_node_version_in_base(&clawy_base_dir(), version)
 }
 
 fn load_settings() -> Settings {
@@ -3588,10 +4146,17 @@ fn inspect_node_binary_candidate(
     path: Option<PathBuf>,
 ) -> NodeBinaryDiagnostic {
     let Some(path) = path else {
+        let detail = match source {
+            NodeBinarySource::Path => "Node.js was not found in PATH",
+            NodeBinarySource::Managed => {
+                "Managed Node.js is not installed or no current version is selected"
+            }
+            NodeBinarySource::Bundled => "Bundled Node.js binary is unavailable",
+        };
         return NodeBinaryDiagnostic::missing(
             source,
             NodeBinaryDiagnosticReason::NotFoundInPath,
-            "Node.js was not found in PATH",
+            detail,
         );
     };
 
@@ -3669,8 +4234,44 @@ fn resolve_node_binary_with_candidates(
     }
 }
 
+fn resolve_node_binary_with_candidates_and_managed(
+    system_path: Option<PathBuf>,
+    managed_path: Option<PathBuf>,
+    bundled_path: PathBuf,
+) -> NodeBinaryResolution {
+    let mut diagnostics = Vec::new();
+
+    let system_diagnostic = inspect_node_binary_candidate(NodeBinarySource::Path, system_path);
+    diagnostics.push(system_diagnostic.clone());
+    if system_diagnostic.is_accepted() {
+        return NodeBinaryResolution::accepted(diagnostics, &system_diagnostic);
+    }
+
+    let managed_diagnostic = inspect_node_binary_candidate(NodeBinarySource::Managed, managed_path);
+    diagnostics.push(managed_diagnostic.clone());
+    if managed_diagnostic.is_accepted() {
+        return NodeBinaryResolution::accepted(diagnostics, &managed_diagnostic);
+    }
+
+    let bundled_diagnostic =
+        inspect_node_binary_candidate(NodeBinarySource::Bundled, Some(bundled_path));
+    diagnostics.push(bundled_diagnostic.clone());
+    if bundled_diagnostic.is_accepted() {
+        return NodeBinaryResolution::accepted(diagnostics, &bundled_diagnostic);
+    }
+
+    NodeBinaryResolution {
+        diagnostics,
+        ..NodeBinaryResolution::default()
+    }
+}
+
 fn resolve_node_binary() -> NodeBinaryResolution {
-    resolve_node_binary_with_candidates(find_command_path("node"), bundled_node_path())
+    resolve_node_binary_with_candidates_and_managed(
+        find_command_path("node"),
+        managed_node_binary_path(),
+        bundled_node_path(),
+    )
 }
 
 fn node_command() -> Result<Command, String> {
@@ -5856,6 +6457,26 @@ fn invoke_ipc(
             }
         }
 
+        "runtime:installManagedNode" => {
+            let payload = serde_json::from_value::<ManagedNodeInstallPayload>(
+                args.get(0).cloned().unwrap_or(Value::Null),
+            )
+            .map_err(|err| format!("Invalid managed Node install payload: {err}"))?;
+            Ok(json!({
+                "success": true,
+                "result": install_managed_node_release(&payload)?
+            }))
+        }
+        "runtime:switchManagedNode" => {
+            let version = args.get(0).and_then(Value::as_str).unwrap_or_default();
+            let pointer = switch_managed_node_version(version)?;
+            Ok(json!({
+                "success": true,
+                "pointer": pointer,
+                "currentPath": managed_runtime_current_pointer_path(ManagedRuntimeKind::Node)
+            }))
+        }
+
         "log:getDir" => {
             ensure_dir(&logs_dir())?;
             Ok(json!(logs_dir()))
@@ -6552,6 +7173,61 @@ mod tests {
         path
     }
 
+    fn create_fake_node_archive(base_dir: &Path, version: &str, archive_name: &str) -> PathBuf {
+        let archive_path = base_dir.join(archive_name);
+        let root_dir = format!("node-v{version}-test/");
+        let archived_binary = create_fake_node_binary(base_dir, "archived-node", version, true);
+        let archived_bytes = fs::read(&archived_binary).expect("read archived node bytes");
+
+        let file = File::create(&archive_path).expect("create fake node archive");
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o755);
+
+        archive
+            .add_directory(root_dir.clone(), options)
+            .expect("add root directory");
+        if !cfg!(windows) {
+            archive
+                .add_directory(format!("{root_dir}bin/"), options)
+                .expect("add bin directory");
+        }
+        archive
+            .start_file(
+                format!("{root_dir}{}", managed_node_binary_relative_path()),
+                options,
+            )
+            .expect("start archived node file");
+        archive
+            .write_all(&archived_bytes)
+            .expect("write archived node bytes");
+        archive.finish().expect("finish archive");
+
+        archive_path
+    }
+
+    fn serve_http_bytes_once(file_name: &str, bytes: Vec<u8>) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let port = listener.local_addr().expect("server addr").port();
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request);
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            stream
+                .write_all(headers.as_bytes())
+                .expect("write response headers");
+            stream.write_all(&bytes).expect("write response body");
+        });
+
+        format!("http://127.0.0.1:{port}/{file_name}")
+    }
+
     #[test]
     fn managed_runtime_helpers_build_versioned_layout_without_touching_openclaw_data_dir() {
         let home_dir = PathBuf::from("/tmp/clawy-home");
@@ -6567,12 +7243,24 @@ mod tests {
             clawy_dir.join("runtime")
         );
         assert_eq!(
+            managed_runtime_downloads_dir_from_base(&clawy_dir),
+            clawy_dir.join("runtime").join("downloads")
+        );
+        assert_eq!(
+            managed_runtime_staging_dir_from_base(&clawy_dir, ManagedRuntimeKind::Node),
+            clawy_dir.join("runtime").join("node").join("staging")
+        );
+        assert_eq!(
             managed_runtime_version_dir_from_base(&clawy_dir, ManagedRuntimeKind::Node, "20.18.0"),
             clawy_dir
                 .join("runtime")
                 .join("node")
                 .join("versions")
                 .join("20.18.0")
+        );
+        assert_eq!(
+            managed_runtime_current_pointer_path_from_base(&clawy_dir, ManagedRuntimeKind::Node),
+            clawy_dir.join("runtime").join("node").join("current")
         );
         assert_eq!(
             managed_runtime_manifest_path_from_base(
@@ -6660,6 +7348,150 @@ mod tests {
             "2026.3.2",
         );
         assert_eq!(reloaded, openclaw_manifest);
+    }
+
+    #[test]
+    fn managed_node_download_pipeline_stores_archive_under_runtime_downloads() {
+        let test_dir = TestDir::new("managed-node-download");
+        let archive_name = "node-v24.8.0-test.zip";
+        let source_archive = create_fake_node_archive(test_dir.path(), "24.8.0", archive_name);
+        let archive_bytes = fs::read(&source_archive).expect("read source archive");
+        let archive_sha256 = sha256_digest_file(&source_archive).expect("sha256 digest");
+        let archive_url = serve_http_bytes_once(archive_name, archive_bytes);
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build client");
+        let payload = ManagedNodeInstallPayload {
+            version: "24.8.0".into(),
+            archive_url,
+            sha256: archive_sha256,
+        };
+
+        let downloaded =
+            download_managed_node_archive_with_client_in_base(test_dir.path(), &client, &payload)
+                .expect("download managed node archive");
+
+        assert_eq!(
+            downloaded,
+            managed_runtime_downloads_dir_from_base(test_dir.path()).join(archive_name)
+        );
+        assert!(downloaded.exists());
+        assert_eq!(
+            sha256_digest_file(&downloaded).expect("downloaded archive sha256"),
+            payload.sha256
+        );
+    }
+
+    #[test]
+    fn managed_node_download_pipeline_enforces_archive_verification() {
+        let test_dir = TestDir::new("managed-node-download-verify");
+        let archive_name = "node-v24.8.0-test.zip";
+        let source_archive = create_fake_node_archive(test_dir.path(), "24.8.0", archive_name);
+        let archive_bytes = fs::read(&source_archive).expect("read source archive");
+        let archive_url = serve_http_bytes_once(archive_name, archive_bytes);
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build client");
+        let payload = ManagedNodeInstallPayload {
+            version: "24.8.0".into(),
+            archive_url,
+            sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
+        };
+
+        let error =
+            download_managed_node_archive_with_client_in_base(test_dir.path(), &client, &payload)
+                .expect_err("checksum mismatch should fail");
+
+        assert!(error.contains("checksum mismatch"));
+        assert!(!managed_runtime_downloads_dir_from_base(test_dir.path())
+            .join(archive_name)
+            .exists());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn managed_node_install_pipeline_stages_promotes_and_activates_version() {
+        let test_dir = TestDir::new("managed-node-install");
+        let archive = create_fake_node_archive(test_dir.path(), "24.8.0", "node-v24.8.0-test.zip");
+
+        let result = install_managed_node_archive_in_base(test_dir.path(), "24.8.0", &archive)
+            .expect("install managed node archive");
+
+        assert_eq!(
+            result.runtime_dir,
+            managed_runtime_version_dir_from_base(
+                test_dir.path(),
+                ManagedRuntimeKind::Node,
+                "24.8.0"
+            )
+        );
+        assert!(result.runtime_dir.exists());
+        assert!(result.manifest_path.exists());
+        assert_eq!(
+            fs::read_to_string(&result.current_path)
+                .expect("read current pointer")
+                .trim(),
+            "24.8.0"
+        );
+        assert!(managed_node_binary_path_for_version_from_base(test_dir.path(), "24.8.0").exists());
+
+        let state = load_managed_runtime_state_from_base(test_dir.path());
+        assert_eq!(
+            state.node.current,
+            Some(ManagedRuntimeVersionPointer::new(
+                ManagedRuntimeKind::Node,
+                "24.8.0",
+            ))
+        );
+        assert_eq!(
+            fs::read_dir(managed_runtime_staging_dir_from_base(
+                test_dir.path(),
+                ManagedRuntimeKind::Node,
+            ))
+            .expect("read staging dir")
+            .count(),
+            0
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn managed_node_switching_updates_current_pointer_and_resolver() {
+        let test_dir = TestDir::new("managed-node-switch");
+        let first_archive =
+            create_fake_node_archive(test_dir.path(), "24.8.0", "node-v24.8.0-test.zip");
+        let second_archive =
+            create_fake_node_archive(test_dir.path(), "24.8.1", "node-v24.8.1-test.zip");
+
+        install_managed_node_archive_in_base(test_dir.path(), "24.8.0", &first_archive)
+            .expect("install first managed node");
+        install_managed_node_archive_in_base(test_dir.path(), "24.8.1", &second_archive)
+            .expect("install second managed node");
+        switch_managed_node_version_in_base(test_dir.path(), "24.8.0")
+            .expect("switch managed node version");
+
+        let system_node = create_fake_node_binary(test_dir.path(), "system-node", "24.7.9", true);
+        let bundled_node = create_fake_node_binary(test_dir.path(), "bundled-node", "24.8.2", true);
+        let resolution = resolve_node_binary_with_candidates_and_managed(
+            Some(system_node),
+            managed_node_binary_path_from_base(test_dir.path()),
+            bundled_node,
+        );
+
+        assert_eq!(resolution.source, Some(NodeBinarySource::Managed));
+        assert_eq!(resolution.version.as_deref(), Some("24.8.0"));
+        assert_eq!(resolution.diagnostics.len(), 2);
+        assert_eq!(
+            fs::read_to_string(managed_runtime_current_pointer_path_from_base(
+                test_dir.path(),
+                ManagedRuntimeKind::Node,
+            ))
+            .expect("read current pointer")
+            .trim(),
+            "24.8.0"
+        );
     }
 
     #[test]
