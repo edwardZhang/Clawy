@@ -48,14 +48,33 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
     }
 
     gatewayInitPromise = (async () => {
+      const refreshChatSessions = async (): Promise<void> => {
+        try {
+          const { useChatStore } = await import('./chat');
+          await useChatStore.getState().loadSessions();
+        } catch (error) {
+          console.warn('Failed to refresh chat sessions after gateway became ready:', error);
+        }
+      };
+
       try {
         // Get initial status first
         const status = await desktopApi.ipcRenderer.invoke('gateway:status') as GatewayStatus;
         set({ status, isInitialized: true });
 
+        if (status.state === 'running') {
+          void refreshChatSessions();
+        }
+
         // Listen for status changes
         desktopApi.ipcRenderer.on('gateway:status-changed', (newStatus) => {
-          set({ status: newStatus as GatewayStatus });
+          const nextStatus = newStatus as GatewayStatus;
+          const previousState = get().status.state;
+          set({ status: nextStatus, lastError: nextStatus.state === 'running' ? null : get().lastError });
+
+          if (nextStatus.state === 'running' && previousState !== 'running') {
+            void refreshChatSessions();
+          }
         });
 
         // Listen for errors
