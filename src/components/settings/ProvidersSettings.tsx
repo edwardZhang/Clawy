@@ -27,7 +27,11 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useProviderStore, type ProviderConfig, type ProviderWithKeyInfo } from '@/stores/providers';
 import {
+  defaultAuthModeForProvider,
+  isProviderAuthModeAvailable,
   PROVIDER_TYPE_INFO,
+  resolveProviderTypeForAuth,
+  shouldHideProviderTypeInPicker,
   type ProviderType,
   getProviderIconUrl,
   resolveProviderApiKeyForSave,
@@ -631,14 +635,23 @@ function AddProviderDialog({
   const showModelIdField = shouldShowProviderModelId(typeInfo, devModeUnlocked);
   const isOAuth = typeInfo?.isOAuth ?? false;
   const supportsApiKey = typeInfo?.supportsApiKey ?? false;
+  const effectiveSelectedType = selectedType
+    ? resolveProviderTypeForAuth(selectedType, authMode)
+    : null;
+  const oauthModeAvailable = selectedType
+    ? isProviderAuthModeAvailable(selectedType, 'oauth', existingTypes)
+    : false;
+  const apiKeyModeAvailable = selectedType
+    ? isProviderAuthModeAvailable(selectedType, 'apikey', existingTypes)
+    : false;
   // Effective OAuth mode: pure OAuth providers, or dual-mode with oauth selected
   const useOAuthFlow = isOAuth && (!supportsApiKey || authMode === 'oauth');
 
   // Keep a ref to the latest values so the effect closure can access them
-  const latestRef = React.useRef({ selectedType, typeInfo, onAdd, onClose, t });
+  const latestRef = React.useRef({ selectedType, effectiveSelectedType, typeInfo, onAdd, onClose, t });
   useEffect(() => {
-    latestRef.current = { selectedType, typeInfo, onAdd, onClose, t };
-  });
+    latestRef.current = { selectedType, effectiveSelectedType, typeInfo, onAdd, onClose, t };
+  }, [selectedType, effectiveSelectedType, typeInfo, onAdd, onClose, t]);
 
   // Manage OAuth events
   useEffect(() => {
@@ -685,9 +698,8 @@ function AddProviderDialog({
         await store.fetchProviders();
 
         // Auto-set as default if no default is currently configured
-        if (!store.defaultProviderId && latestRef.current.selectedType) {
-          // Provider type is expected to match provider ID for built-in OAuth providers
-          await store.setDefaultProvider(latestRef.current.selectedType);
+        if (!store.defaultProviderId && latestRef.current.effectiveSelectedType) {
+          await store.setDefaultProvider(latestRef.current.effectiveSelectedType);
         }
       } catch (err) {
         console.error('Failed to refresh providers after OAuth:', err);
@@ -730,6 +742,10 @@ function AddProviderDialog({
       toast.error(t('aiProviders.toast.minimaxConflict'));
       return;
     }
+    if (!oauthModeAvailable) {
+      toast.error(t('aiProviders.toast.failedAdd'));
+      return;
+    }
 
     setOauthFlowing(true);
     setOauthData(null);
@@ -739,7 +755,7 @@ function AddProviderDialog({
     setOauthError(null);
 
     try {
-      await desktopApi.ipcRenderer.invoke('provider:requestOAuth', selectedType);
+      await desktopApi.ipcRenderer.invoke('provider:requestOAuth', effectiveSelectedType);
     } catch (e) {
       setOauthError(String(e));
       setOauthFlowing(false);
@@ -769,9 +785,15 @@ function AddProviderDialog({
   };
 
   // Only custom can be added multiple times.
-  const availableTypes = PROVIDER_TYPE_INFO.filter(
-    (t) => t.id === 'custom' || !existingTypes.has(t.id),
-  );
+  const availableTypes = PROVIDER_TYPE_INFO.filter((providerType) => {
+    if (shouldHideProviderTypeInPicker(providerType.id)) {
+      return false;
+    }
+    if (providerType.id === 'openai') {
+      return !(existingTypes.has('openai') && existingTypes.has('openai-codex'));
+    }
+    return providerType.id === 'custom' || !existingTypes.has(providerType.id);
+  });
 
   const handleAdd = async () => {
     if (!selectedType) return;
@@ -782,6 +804,10 @@ function AddProviderDialog({
     }
     if (selectedType === 'minimax-portal-cn' && existingTypes.has('minimax-portal')) {
       toast.error(t('aiProviders.toast.minimaxConflict'));
+      return;
+    }
+    if (selectedType === 'openai' && !apiKeyModeAvailable) {
+      toast.error(t('aiProviders.toast.failedAdd'));
       return;
     }
 
@@ -850,6 +876,7 @@ function AddProviderDialog({
                     setName(type.id === 'custom' ? t('aiProviders.custom') : type.name);
                     setBaseUrl(type.defaultBaseUrl || '');
                     setModelId(type.defaultModelId || '');
+                    setAuthMode(defaultAuthModeForProvider(type.id, existingTypes, type));
                   }}
                   className="p-4 rounded-lg border hover:bg-accent transition-colors text-center"
                 >
@@ -900,19 +927,23 @@ function AddProviderDialog({
               {isOAuth && supportsApiKey && (
                 <div className="flex rounded-lg border overflow-hidden text-sm">
                   <button
-                    onClick={() => setAuthMode('oauth')}
+                    onClick={() => oauthModeAvailable && setAuthMode('oauth')}
+                    disabled={!oauthModeAvailable}
                     className={cn(
                       'flex-1 py-2 px-3 transition-colors',
-                      authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
+                      authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
+                      !oauthModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
                     )}
                   >
-                    {t('aiProviders.oauth.loginMode')}
+                    {selectedType === 'openai' ? t('aiProviders.oauth.codexMode') : t('aiProviders.oauth.loginMode')}
                   </button>
                   <button
-                    onClick={() => setAuthMode('apikey')}
+                    onClick={() => apiKeyModeAvailable && setAuthMode('apikey')}
+                    disabled={!apiKeyModeAvailable}
                     className={cn(
                       'flex-1 py-2 px-3 transition-colors',
-                      authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
+                      authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
+                      !apiKeyModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
                     )}
                   >
                     {t('aiProviders.oauth.apikeyMode')}
@@ -995,10 +1026,12 @@ function AddProviderDialog({
               {/* Device OAuth Trigger — only shown when in OAuth mode */}
               {useOAuthFlow && (
                 <div className="space-y-4 pt-2">
-                  <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-4 text-center">
-                    <p className="text-sm text-blue-200 mb-3 block">
-                      {t('aiProviders.oauth.loginPrompt')}
-                    </p>
+                <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-4 text-center">
+                  <p className="text-sm text-blue-200 mb-3 block">
+                    {selectedType === 'openai'
+                      ? t('aiProviders.oauth.codexPrompt')
+                      : t('aiProviders.oauth.loginPrompt')}
+                  </p>
                     <Button
                       onClick={handleStartOAuth}
                       disabled={oauthFlowing}
