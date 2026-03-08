@@ -77,6 +77,8 @@
       "loginMode": "OAuth Login",
       "codexMode": "Codex OAuth",
       "apikeyMode": "API Key",
+      "codexConfiguredHint": "Codex OAuth is already configured. Edit the existing Codex provider card to update it.",
+      "apiKeyConfiguredHint": "An OpenAI API key provider is already configured. Edit the existing OpenAI provider card to update it.",
       "loginPrompt": "This provider requires signing in via your browser.",
       "codexPrompt": "Sign in with your OpenAI account to enable Codex OAuth.",
       "loginButton": "Login with Browser",
