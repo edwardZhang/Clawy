@@ -77,6 +77,8 @@
       "loginMode": "OAuthログイン",
       "codexMode": "Codex OAuth",
       "apikeyMode": "APIキー",
+      "codexConfiguredHint": "Codex OAuth はすでに設定済みです。既存の Codex プロバイダーカードから編集してください。",
+      "apiKeyConfiguredHint": "OpenAI APIキーはすでに設定済みです。既存の OpenAI プロバイダーカードから編集してください。",
       "loginPrompt": "このプロバイダーはブラウザからのサインインが必要です。",
       "codexPrompt": "OpenAI アカウントでサインインして Codex OAuth を有効にします。",
       "loginButton": "ブラウザでログイン",

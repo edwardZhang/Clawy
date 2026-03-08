@@ -925,29 +925,41 @@ function AddProviderDialog({
 
               {/* Auth mode toggle for providers supporting both */}
               {isOAuth && supportsApiKey && (
-                <div className="flex rounded-lg border overflow-hidden text-sm">
-                  <button
-                    onClick={() => oauthModeAvailable && setAuthMode('oauth')}
-                    disabled={!oauthModeAvailable}
-                    className={cn(
-                      'flex-1 py-2 px-3 transition-colors',
-                      authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
-                      !oauthModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
-                    )}
-                  >
-                    {selectedType === 'openai' ? t('aiProviders.oauth.codexMode') : t('aiProviders.oauth.loginMode')}
-                  </button>
-                  <button
-                    onClick={() => apiKeyModeAvailable && setAuthMode('apikey')}
-                    disabled={!apiKeyModeAvailable}
-                    className={cn(
-                      'flex-1 py-2 px-3 transition-colors',
-                      authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
-                      !apiKeyModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
-                    )}
-                  >
-                    {t('aiProviders.oauth.apikeyMode')}
-                  </button>
+                <div className="space-y-2">
+                  <div className="flex rounded-lg border overflow-hidden text-sm">
+                    <button
+                      onClick={() => oauthModeAvailable && setAuthMode('oauth')}
+                      disabled={!oauthModeAvailable}
+                      className={cn(
+                        'flex-1 py-2 px-3 transition-colors',
+                        authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
+                        !oauthModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
+                      )}
+                    >
+                      {selectedType === 'openai' ? t('aiProviders.oauth.codexMode') : t('aiProviders.oauth.loginMode')}
+                    </button>
+                    <button
+                      onClick={() => apiKeyModeAvailable && setAuthMode('apikey')}
+                      disabled={!apiKeyModeAvailable}
+                      className={cn(
+                        'flex-1 py-2 px-3 transition-colors',
+                        authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
+                        !apiKeyModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
+                      )}
+                    >
+                      {t('aiProviders.oauth.apikeyMode')}
+                    </button>
+                  </div>
+                  {selectedType === 'openai' && !oauthModeAvailable && (
+                    <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                      {t('aiProviders.oauth.codexConfiguredHint')}
+                    </div>
+                  )}
+                  {selectedType === 'openai' && !apiKeyModeAvailable && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                      {t('aiProviders.oauth.apiKeyConfiguredHint')}
+                    </div>
+                  )}
                 </div>
               )}
 
