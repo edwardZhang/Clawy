@@ -9,6 +9,9 @@ import {
   Moon,
   Monitor,
   RefreshCw,
+  Loader2,
+  Play,
+  Square,
   Terminal,
   ExternalLink,
   Key,
@@ -161,7 +164,7 @@ export function Settings() {
     setDevModeUnlocked,
   } = useSettingsStore();
 
-  const { status: gatewayStatus, restart: restartGateway } = useGatewayStore();
+  const { status: gatewayStatus, start: startGateway, stop: stopGateway, restart: restartGateway } = useGatewayStore();
   const currentVersion = useUpdateStore((state) => state.currentVersion);
   const updateSetAutoDownload = useUpdateStore((state) => state.setAutoDownload);
   const [controlUiInfo, setControlUiInfo] = useState<ControlUiInfo | null>(null);
@@ -185,6 +188,7 @@ export function Settings() {
   const showCliTools = true;
   const [showLogs, setShowLogs] = useState(false);
   const [logContent, setLogContent] = useState('');
+  const [gatewayAction, setGatewayAction] = useState<'start' | 'stop' | 'restart' | null>(null);
 
   const handleShowLogs = async () => {
     try {
@@ -205,6 +209,49 @@ export function Settings() {
       }
     } catch {
       // ignore
+    }
+  };
+
+  const handleToggleGateway = async () => {
+    const shouldStop = gatewayStatus.state === 'running'
+      || gatewayStatus.state === 'starting'
+      || gatewayStatus.state === 'reconnecting';
+    const nextAction = shouldStop ? 'stop' : 'start';
+
+    setGatewayAction(nextAction);
+    try {
+      if (shouldStop) {
+        await stopGateway();
+      } else {
+        await startGateway();
+      }
+    } finally {
+      setGatewayAction(null);
+    }
+  };
+
+  const handleRestartGateway = async () => {
+    setGatewayAction('restart');
+    try {
+      await restartGateway();
+    } finally {
+      setGatewayAction(null);
+    }
+  };
+
+  const handleGatewayAutoStartChange = async (checked: boolean) => {
+    setGatewayAutoStart(checked);
+    if (!checked) {
+      return;
+    }
+
+    if (gatewayStatus.state === 'stopped' || gatewayStatus.state === 'error') {
+      setGatewayAction('start');
+      try {
+        await startGateway();
+      } finally {
+        setGatewayAction(null);
+      }
     }
   };
 
@@ -616,8 +663,30 @@ export function Settings() {
               >
                 {gatewayStatus.state}
               </Badge>
-              <Button variant="outline" size="sm" onClick={restartGateway}>
-                <RefreshCw className="h-4 w-4 mr-2" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleToggleGateway}
+                disabled={gatewayAction !== null}
+              >
+                {gatewayAction === 'start' || gatewayAction === 'stop' ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : gatewayStatus.state === 'running' || gatewayStatus.state === 'starting' || gatewayStatus.state === 'reconnecting' ? (
+                  <Square className="h-4 w-4 mr-2" />
+                ) : (
+                  <Play className="h-4 w-4 mr-2" />
+                )}
+                {gatewayStatus.state === 'running' || gatewayStatus.state === 'starting' || gatewayStatus.state === 'reconnecting'
+                  ? t('common:actions.stop')
+                  : t('common:actions.start')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRestartGateway}
+                disabled={gatewayAction !== null}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2${gatewayAction === 'restart' ? ' animate-spin' : ''}`} />
                 {t('common:actions.restart')}
               </Button>
               <Button variant="outline" size="sm" onClick={handleShowLogs}>
@@ -658,7 +727,9 @@ export function Settings() {
             </div>
             <Switch
               checked={gatewayAutoStart}
-              onCheckedChange={setGatewayAutoStart}
+              onCheckedChange={(checked) => {
+                void handleGatewayAutoStartChange(checked);
+              }}
             />
           </div>
 

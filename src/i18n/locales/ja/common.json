@@ -28,6 +28,8 @@
         "back": "戻る",
         "next": "次へ",
         "skip": "スキップ",
+        "start": "起動",
+        "stop": "停止",
         "restart": "再起動"
     },
     "status": {
