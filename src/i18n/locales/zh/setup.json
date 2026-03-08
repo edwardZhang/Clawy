@@ -90,6 +90,13 @@
             "pending": "Clawy 正在验证运行时环境。在三个卡片全部就绪前，“下一步”会保持禁用。",
             "readyWhenAllPass": "必须让三个卡片都显示“已就绪”，才能继续下一步设置。"
         },
+        "phases": {
+            "preparing": "正在准备下载...",
+            "downloading": "正在下载包...",
+            "installing": "正在安装运行时...",
+            "completed": "安装完成。",
+            "failed": "安装失败。"
+        },
         "toast": {
             "nodeInstalled": "已安装托管 Node.js {{version}}。",
             "openclawInstalled": "已安装 OpenClaw {{version}}。"

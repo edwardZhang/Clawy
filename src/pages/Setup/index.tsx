@@ -27,6 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import {
   createRuntimeCheckMachineState,
@@ -383,6 +384,23 @@ interface RuntimeInstallResponse {
     version?: string;
   };
 }
+
+interface RuntimeInstallEventPayload {
+  runtime?: 'nodejs' | 'openclaw';
+  phase?: 'preparing' | 'downloading' | 'installing' | 'completed' | 'failed';
+  status?: 'running' | 'completed' | 'failed';
+  percent?: number;
+  version?: string;
+  detail?: string;
+  error?: string;
+  progress?: {
+    total?: number;
+    delta?: number;
+    transferred?: number;
+    percent?: number;
+    bytesPerSecond?: number;
+  };
+}
 function formatRuntimeSource(source?: 'path' | 'managed' | 'bundled' | 'nodeModules') {
   switch (source) {
     case 'path':
@@ -400,6 +418,32 @@ function formatRuntimeSource(source?: 'path' | 'managed' | 'bundled' | 'nodeModu
 
 function firstDiagnosticDetail(diagnostics?: Array<{ detail?: string }>) {
   return diagnostics?.find((diagnostic) => diagnostic.detail)?.detail;
+}
+
+function formatBytes(bytes?: number): string {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return unitIndex === 0 ? `${Math.round(value)} ${units[unitIndex]}` : `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function describeInstallProgress(payload: RuntimeInstallEventPayload): string | undefined {
+  const progress = payload.progress;
+  if (!progress) return payload.detail;
+  if (progress.total && progress.total > 0) {
+    const speed = progress.bytesPerSecond ? `${formatBytes(progress.bytesPerSecond)}/s` : undefined;
+    return [ `${formatBytes(progress.transferred)} / ${formatBytes(progress.total)}`, speed ].filter(Boolean).join(' • ');
+  }
+  if (progress.transferred && progress.transferred > 0) {
+    const speed = progress.bytesPerSecond ? ` at ${formatBytes(progress.bytesPerSecond)}/s` : '';
+    return `${formatBytes(progress.transferred)} downloaded${speed}`;
+  }
+  return payload.detail;
 }
 
 function runtimeCheckBadgeVariant(status: RuntimeCheckStatus) {
@@ -484,6 +528,23 @@ function RuntimeCheckCard({
           </div>
         )}
 
+        {state.progress && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{Math.round(state.progress.percent)}%</span>
+              {state.progress.bytesPerSecond ? (
+                <span>{formatBytes(state.progress.bytesPerSecond)}/s</span>
+              ) : null}
+            </div>
+            <Progress value={state.progress.percent} className="h-2" />
+            {(state.progress.total || state.progress.transferred) ? (
+              <p className="text-xs text-muted-foreground">
+                {formatBytes(state.progress.transferred)} / {formatBytes(state.progress.total)}
+              </p>
+            ) : null}
+          </div>
+        )}
+
         {actionLabel && onAction && (
           <div className="flex justify-end">
             <Button
@@ -517,6 +578,11 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const gatewayTimeoutRef = useRef<number | null>(null);
   const runtimeReady = useMemo(() => runtimePrerequisitesReady(checks), [checks]);
   const allChecksPassed = useMemo(() => runtimeChecksReady(checks), [checks]);
+
+  const runtimeInstallMessage = useCallback((payload: RuntimeInstallEventPayload) => {
+    const phase = payload.phase ?? 'installing';
+    return t(`runtime.phases.${phase}`, { defaultValue: payload.detail || phase });
+  }, [t]);
 
   const evaluateGatewayAvailability = useCallback(async (runtimePrereqsReady: boolean) => {
     const currentGateway = useGatewayStore.getState().status;
@@ -668,6 +734,71 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   useEffect(() => {
     void runChecks();
   }, [runChecks]);
+
+  useEffect(() => {
+    const unlisten = desktopApi.ipcRenderer.on('runtime:install-progress', (payload) => {
+      const event = payload as RuntimeInstallEventPayload;
+      const key = event.runtime;
+      if (key !== 'nodejs' && key !== 'openclaw') {
+        return;
+      }
+
+      const progress = typeof event.percent === 'number'
+        ? {
+            phase: event.phase,
+            percent: event.percent,
+            transferred: event.progress?.transferred,
+            total: event.progress?.total,
+            bytesPerSecond: event.progress?.bytesPerSecond,
+          }
+        : undefined;
+
+      if (event.status === 'failed') {
+        dispatchChecks({
+          type: 'set',
+          key,
+          patch: {
+            status: 'error',
+            message: event.error || runtimeInstallMessage(event),
+            detail: describeInstallProgress(event),
+            progress: undefined,
+          },
+        });
+        return;
+      }
+
+      if (event.status === 'completed') {
+        dispatchChecks({
+          type: 'set',
+          key,
+          patch: {
+            status: 'checking',
+            message: runtimeInstallMessage(event),
+            detail: describeInstallProgress(event),
+            progress,
+          },
+        });
+        return;
+      }
+
+      dispatchChecks({
+        type: 'set',
+        key,
+        patch: {
+          status: 'checking',
+          message: runtimeInstallMessage(event),
+          detail: describeInstallProgress(event),
+          progress,
+        },
+      });
+    });
+
+    return () => {
+      if (typeof unlisten === 'function') {
+        unlisten();
+      }
+    };
+  }, [runtimeInstallMessage]);
 
   useEffect(() => {
     onStatusChange(allChecksPassed);

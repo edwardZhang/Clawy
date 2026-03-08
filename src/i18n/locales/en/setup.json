@@ -90,6 +90,13 @@
             "pending": "Clawy is still validating the runtime environment. Next stays disabled until all three cards are ready.",
             "readyWhenAllPass": "All three cards must show Ready before you can continue to the next setup step."
         },
+        "phases": {
+            "preparing": "Preparing download...",
+            "downloading": "Downloading package...",
+            "installing": "Installing runtime...",
+            "completed": "Install complete.",
+            "failed": "Install failed."
+        },
         "toast": {
             "nodeInstalled": "Managed Node.js {{version}} installed.",
             "openclawInstalled": "OpenClaw {{version}} installed."

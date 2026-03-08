@@ -116,6 +116,23 @@ struct DownloadProgressPayload {
     bytes_per_second: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeInstallProgressPayload {
+    runtime: String,
+    phase: String,
+    status: String,
+    percent: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress: Option<DownloadProgressPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateStatusPayload {
@@ -210,6 +227,13 @@ impl ManagedRuntimeKind {
     fn dir_name(self) -> &'static str {
         match self {
             Self::Node => "node",
+            Self::OpenClaw => "openclaw",
+        }
+    }
+
+    fn event_key(self) -> &'static str {
+        match self {
+            Self::Node => "nodejs",
             Self::OpenClaw => "openclaw",
         }
     }
@@ -1482,6 +1506,63 @@ fn file_name_from_url(url: &str) -> Result<String, String> {
     Ok(file_name.to_string())
 }
 
+fn download_http_response_to_file(
+    mut response: reqwest::blocking::Response,
+    destination: &Path,
+    mut on_progress: Option<&mut dyn FnMut(DownloadProgressPayload)>,
+) -> Result<(), String> {
+    let total = response.content_length().unwrap_or(0);
+    let mut output = File::create(destination).map_err(|err| err.to_string())?;
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut transferred = 0_u64;
+    let started_at = SystemTime::now();
+
+    if let Some(progress_cb) = on_progress.as_deref_mut() {
+        progress_cb(DownloadProgressPayload {
+            total,
+            delta: 0,
+            transferred: 0,
+            percent: 0.0,
+            bytes_per_second: 0,
+        });
+    }
+
+    loop {
+        let read = response.read(&mut buffer).map_err(|err| err.to_string())?;
+        if read == 0 {
+            break;
+        }
+
+        output
+            .write_all(&buffer[..read])
+            .map_err(|err| err.to_string())?;
+        transferred = transferred.saturating_add(read as u64);
+
+        if let Some(progress_cb) = on_progress.as_deref_mut() {
+            let elapsed_ms = started_at
+                .elapsed()
+                .unwrap_or_else(|_| Duration::from_millis(1))
+                .as_millis()
+                .max(1) as u64;
+            let bytes_per_second = transferred.saturating_mul(1000) / elapsed_ms;
+            let percent = if total > 0 {
+                (transferred as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            progress_cb(DownloadProgressPayload {
+                total,
+                delta: read as u64,
+                transferred,
+                percent,
+                bytes_per_second,
+            });
+        }
+    }
+
+    output.flush().map_err(|err| err.to_string())
+}
+
 fn managed_node_binary_relative_path() -> &'static str {
     if cfg!(windows) {
         "node.exe"
@@ -1544,6 +1625,79 @@ fn managed_openclaw_dir_from_base(base_dir: &Path) -> Option<PathBuf> {
 
 fn managed_openclaw_dir() -> Option<PathBuf> {
     managed_openclaw_dir_from_base(&clawy_base_dir())
+}
+
+fn emit_runtime_install_progress(
+    app: &AppHandle,
+    kind: ManagedRuntimeKind,
+    phase: &str,
+    status: &str,
+    percent: f64,
+    version: Option<&str>,
+    detail: Option<String>,
+    progress: Option<DownloadProgressPayload>,
+    error: Option<String>,
+) {
+    let payload = RuntimeInstallProgressPayload {
+        runtime: kind.event_key().into(),
+        phase: phase.into(),
+        status: status.into(),
+        percent,
+        version: version
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string()),
+        detail,
+        progress,
+        error,
+    };
+    let _ = app.emit("runtime:install-progress", payload);
+}
+
+fn format_download_progress_detail(progress: &DownloadProgressPayload) -> String {
+    if progress.total > 0 {
+        format!(
+            "{} / {} at {}/s",
+            human_bytes(progress.transferred),
+            human_bytes(progress.total),
+            human_bytes(progress.bytes_per_second)
+        )
+    } else if progress.transferred > 0 {
+        format!(
+            "{} downloaded at {}/s",
+            human_bytes(progress.transferred),
+            human_bytes(progress.bytes_per_second)
+        )
+    } else {
+        "Waiting for download data...".into()
+    }
+}
+
+fn runtime_stage_percent(base: f64, span: f64, progress: &DownloadProgressPayload) -> f64 {
+    if progress.total == 0 {
+        return base;
+    }
+    (base + ((progress.percent / 100.0) * span)).clamp(0.0, 100.0)
+}
+
+fn human_bytes(bytes: u64) -> String {
+    if bytes == 0 {
+        return "0 B".into();
+    }
+
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut index = 0usize;
+    while value >= 1024.0 && index < UNITS.len() - 1 {
+        value /= 1024.0;
+        index += 1;
+    }
+
+    if index == 0 {
+        format!("{} {}", bytes, UNITS[index])
+    } else {
+        format!("{value:.1} {}", UNITS[index])
+    }
 }
 
 #[cfg(unix)]
@@ -1845,6 +1999,7 @@ fn download_managed_openclaw_archive_with_client_in_base_and_registry(
     client: &reqwest::blocking::Client,
     version: &str,
     registry_base_url: &str,
+    on_progress: Option<&mut dyn FnMut(DownloadProgressPayload)>,
 ) -> Result<PathBuf, String> {
     let target = resolve_managed_openclaw_download_target_with_client_and_registry(
         client,
@@ -1876,10 +2031,7 @@ fn download_managed_openclaw_archive_with_client_in_base_and_registry(
         .error_for_status()
         .map_err(|err| format!("Managed OpenClaw {} download failed: {err}", target.version))?;
 
-    let mut response = response;
-    let mut output = File::create(&temp_path).map_err(|err| err.to_string())?;
-    let download_result = std::io::copy(&mut response, &mut output).map_err(|err| err.to_string());
-    output.flush().map_err(|err| err.to_string())?;
+    let download_result = download_http_response_to_file(response, &temp_path, on_progress);
 
     if let Err(err) = download_result {
         let _ = remove_path_if_exists(&temp_path);
@@ -1909,6 +2061,7 @@ fn download_managed_openclaw_archive_with_client_in_base(
         client,
         version,
         OPENCLAW_NPM_REGISTRY_BASE_URL,
+        None,
     )
 }
 
@@ -1924,6 +2077,7 @@ fn download_managed_node_archive_with_client_in_base(
     base_dir: &Path,
     client: &reqwest::blocking::Client,
     payload: &ManagedNodeInstallPayload,
+    on_progress: Option<&mut dyn FnMut(DownloadProgressPayload)>,
 ) -> Result<PathBuf, String> {
     let version = payload.version.trim();
     if version.is_empty() {
@@ -1950,10 +2104,7 @@ fn download_managed_node_archive_with_client_in_base(
         .error_for_status()
         .map_err(|err| format!("Managed Node archive download failed: {err}"))?;
 
-    let mut response = response;
-    let mut output = File::create(&temp_path).map_err(|err| err.to_string())?;
-    let download_result = std::io::copy(&mut response, &mut output).map_err(|err| err.to_string());
-    output.flush().map_err(|err| err.to_string())?;
+    let download_result = download_http_response_to_file(response, &temp_path, on_progress);
 
     if let Err(err) = download_result {
         let _ = remove_path_if_exists(&temp_path);
@@ -1978,7 +2129,7 @@ fn download_managed_node_archive_in_base(
     payload: &ManagedNodeInstallPayload,
 ) -> Result<PathBuf, String> {
     let client = reqwest_client_with_timeout(Duration::from_secs(300))?;
-    download_managed_node_archive_with_client_in_base(base_dir, &client, payload)
+    download_managed_node_archive_with_client_in_base(base_dir, &client, payload, None)
 }
 
 fn activate_managed_runtime_version_in_base(
@@ -2139,10 +2290,93 @@ fn install_managed_node_release(
     install_managed_node_release_in_base(&clawy_base_dir(), payload)
 }
 
+#[allow(dead_code)]
 fn install_recommended_managed_node_release() -> Result<ManagedNodeInstallResult, String> {
     let client = reqwest_client()?;
     let payload = resolve_recommended_managed_node_payload_with_client(&client)?;
     install_managed_node_release(&payload)
+}
+
+fn install_recommended_managed_node_release_with_progress(
+    app: &AppHandle,
+) -> Result<ManagedNodeInstallResult, String> {
+    let kind = ManagedRuntimeKind::Node;
+    emit_runtime_install_progress(
+        app,
+        kind,
+        "preparing",
+        "running",
+        5.0,
+        Some(RECOMMENDED_MANAGED_NODE_VERSION),
+        Some("Preparing managed Node.js runtime download.".into()),
+        None,
+        None,
+    );
+
+    let client = reqwest_client()?;
+    let payload = resolve_recommended_managed_node_payload_with_client(&client)?;
+    let version = payload.version.clone();
+
+    emit_runtime_install_progress(
+        app,
+        kind,
+        "downloading",
+        "running",
+        12.0,
+        Some(&version),
+        Some("Downloading managed Node.js runtime.".into()),
+        None,
+        None,
+    );
+
+    let mut download_progress = |progress: DownloadProgressPayload| {
+        emit_runtime_install_progress(
+            app,
+            kind,
+            "downloading",
+            "running",
+            runtime_stage_percent(12.0, 56.0, &progress),
+            Some(&version),
+            Some(format_download_progress_detail(&progress)),
+            Some(progress),
+            None,
+        );
+    };
+
+    let archive_path = download_managed_node_archive_with_client_in_base(
+        &clawy_base_dir(),
+        &client,
+        &payload,
+        Some(&mut download_progress),
+    )?;
+
+    emit_runtime_install_progress(
+        app,
+        kind,
+        "installing",
+        "running",
+        82.0,
+        Some(&version),
+        Some("Installing managed Node.js runtime.".into()),
+        None,
+        None,
+    );
+
+    let result = install_managed_node_archive_in_base(&clawy_base_dir(), &version, &archive_path)?;
+
+    emit_runtime_install_progress(
+        app,
+        kind,
+        "completed",
+        "completed",
+        100.0,
+        Some(&version),
+        Some("Managed Node.js runtime installed.".into()),
+        None,
+        None,
+    );
+
+    Ok(result)
 }
 
 fn install_managed_openclaw_archive_in_base(
@@ -2260,11 +2494,95 @@ fn install_managed_openclaw_release(
     install_managed_openclaw_release_in_base(&clawy_base_dir(), payload)
 }
 
+#[allow(dead_code)]
 fn install_recommended_managed_openclaw_release() -> Result<ManagedOpenClawInstallResult, String> {
     let payload = ManagedOpenClawInstallPayload {
         version: recommended_openclaw_version()?,
     };
     install_managed_openclaw_release(&payload)
+}
+
+fn install_recommended_managed_openclaw_release_with_progress(
+    app: &AppHandle,
+) -> Result<ManagedOpenClawInstallResult, String> {
+    let kind = ManagedRuntimeKind::OpenClaw;
+    let version = recommended_openclaw_version()?;
+
+    emit_runtime_install_progress(
+        app,
+        kind,
+        "preparing",
+        "running",
+        5.0,
+        Some(&version),
+        Some("Preparing OpenClaw download.".into()),
+        None,
+        None,
+    );
+
+    let client = reqwest_client()?;
+    emit_runtime_install_progress(
+        app,
+        kind,
+        "downloading",
+        "running",
+        12.0,
+        Some(&version),
+        Some("Downloading OpenClaw package.".into()),
+        None,
+        None,
+    );
+
+    let mut download_progress = |progress: DownloadProgressPayload| {
+        emit_runtime_install_progress(
+            app,
+            kind,
+            "downloading",
+            "running",
+            runtime_stage_percent(12.0, 56.0, &progress),
+            Some(&version),
+            Some(format_download_progress_detail(&progress)),
+            Some(progress),
+            None,
+        );
+    };
+
+    let archive_path = download_managed_openclaw_archive_with_client_in_base_and_registry(
+        &clawy_base_dir(),
+        &client,
+        &version,
+        OPENCLAW_NPM_REGISTRY_BASE_URL,
+        Some(&mut download_progress),
+    )?;
+
+    emit_runtime_install_progress(
+        app,
+        kind,
+        "installing",
+        "running",
+        82.0,
+        Some(&version),
+        Some("Installing OpenClaw runtime.".into()),
+        None,
+        None,
+    );
+
+    let result =
+        install_managed_openclaw_archive_in_base(&clawy_base_dir(), &version, &archive_path)?;
+
+    emit_runtime_install_progress(
+        app,
+        kind,
+        "completed",
+        "completed",
+        100.0,
+        Some(&version),
+        Some("OpenClaw runtime installed.".into()),
+        None,
+        None,
+    );
+
+    Ok(result)
 }
 
 fn switch_managed_node_version_in_base(
@@ -7500,10 +7818,28 @@ fn invoke_ipc(
                 "result": install_managed_node_release(&payload)?
             }))
         }
-        "runtime:installRecommendedNode" => Ok(json!({
-            "success": true,
-            "result": install_recommended_managed_node_release()?
-        })),
+        "runtime:installRecommendedNode" => {
+            match install_recommended_managed_node_release_with_progress(&app) {
+                Ok(result) => Ok(json!({
+                    "success": true,
+                    "result": result
+                })),
+                Err(error) => {
+                    emit_runtime_install_progress(
+                        &app,
+                        ManagedRuntimeKind::Node,
+                        "failed",
+                        "failed",
+                        100.0,
+                        Some(RECOMMENDED_MANAGED_NODE_VERSION),
+                        None,
+                        None,
+                        Some(error.clone()),
+                    );
+                    Err(error)
+                }
+            }
+        }
         "runtime:switchManagedNode" => {
             let version = args.get(0).and_then(Value::as_str).unwrap_or_default();
             let pointer = switch_managed_node_version(version)?;
@@ -7523,10 +7859,29 @@ fn invoke_ipc(
                 "result": install_managed_openclaw_release(&payload)?
             }))
         }
-        "runtime:installRecommendedOpenClaw" => Ok(json!({
-            "success": true,
-            "result": install_recommended_managed_openclaw_release()?
-        })),
+        "runtime:installRecommendedOpenClaw" => {
+            let version = recommended_openclaw_version().ok();
+            match install_recommended_managed_openclaw_release_with_progress(&app) {
+                Ok(result) => Ok(json!({
+                    "success": true,
+                    "result": result
+                })),
+                Err(error) => {
+                    emit_runtime_install_progress(
+                        &app,
+                        ManagedRuntimeKind::OpenClaw,
+                        "failed",
+                        "failed",
+                        100.0,
+                        version.as_deref(),
+                        None,
+                        None,
+                        Some(error.clone()),
+                    );
+                    Err(error)
+                }
+            }
+        }
         "runtime:switchManagedOpenClaw" => {
             let version = args.get(0).and_then(Value::as_str).unwrap_or_default();
             let pointer = switch_managed_openclaw_version(version)?;
