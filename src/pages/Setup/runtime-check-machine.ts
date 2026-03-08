@@ -2,11 +2,20 @@ export type RuntimeCheckKey = 'nodejs' | 'openclaw' | 'gateway';
 
 export type RuntimeCheckStatus = 'idle' | 'checking' | 'success' | 'error';
 
+export interface RuntimeCheckProgress {
+  phase?: string;
+  percent: number;
+  transferred?: number;
+  total?: number;
+  bytesPerSecond?: number;
+}
+
 export interface RuntimeCheckState {
   status: RuntimeCheckStatus;
   message: string;
   detail?: string;
   path?: string;
+  progress?: RuntimeCheckProgress;
 }
 
 export interface RuntimeCheckMachineState {
@@ -18,6 +27,7 @@ export interface RuntimeCheckPatch {
   message?: string;
   detail?: string;
   path?: string;
+  progress?: RuntimeCheckProgress;
 }
 
 type RuntimeCheckMachineAction =
@@ -55,6 +65,7 @@ function mergeCheckState(
     message: patch.message ?? current.message,
     detail: patch.detail,
     path: patch.path,
+    progress: patch.progress,
   };
 }
 

@@ -90,6 +90,13 @@
             "pending": "Clawy がランタイム環境を検証しています。3 枚のカードすべてが準備完了になるまで「次へ」は無効のままです。",
             "readyWhenAllPass": "次のセットアップ手順に進むには、3 枚のカードすべてが「準備完了」になる必要があります。"
         },
+        "phases": {
+            "preparing": "ダウンロードを準備しています...",
+            "downloading": "パッケージをダウンロードしています...",
+            "installing": "ランタイムをインストールしています...",
+            "completed": "インストールが完了しました。",
+            "failed": "インストールに失敗しました。"
+        },
         "toast": {
             "nodeInstalled": "管理対象 Node.js {{version}} をインストールしました。",
             "openclawInstalled": "OpenClaw {{version}} をインストールしました。"
