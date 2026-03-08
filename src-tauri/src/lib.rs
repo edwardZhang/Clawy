@@ -1024,6 +1024,8 @@ struct ProviderConfig {
     name: String,
     #[serde(rename = "type")]
     provider_type: String,
+    #[serde(default)]
+    auth_mode: Option<String>,
     base_url: Option<String>,
     model: Option<String>,
     fallback_models: Option<Vec<String>>,
@@ -3195,6 +3197,7 @@ fn sync_provider_store_from_openclaw(store: &mut ProviderStore) -> bool {
             id: "openai-codex".into(),
             name: "Codex".into(),
             provider_type: "openai-codex".into(),
+            auth_mode: Some("oauth".into()),
             base_url: None,
             model,
             fallback_models: store
@@ -3245,6 +3248,84 @@ fn sync_provider_store_from_openclaw(store: &mut ProviderStore) -> bool {
         && store.default_provider.as_deref() != Some("openai-codex")
     {
         store.default_provider = Some("openai-codex".into());
+        changed = true;
+    }
+
+    if provider_has_auth_profile("anthropic") {
+        let auth_mode = match provider_auth_profile_type("anthropic").as_deref() {
+            Some("token") => Some("token".to_string()),
+            Some("oauth") => Some("oauth".to_string()),
+            Some("api_key") => Some("apikey".to_string()),
+            _ => Some("apikey".to_string()),
+        };
+        let model = default_model
+            .as_deref()
+            .filter(|value| value.starts_with("anthropic/"))
+            .and_then(|value| value.strip_prefix("anthropic/"))
+            .map(str::to_string)
+            .or_else(|| {
+                store
+                    .providers
+                    .get("anthropic")
+                    .and_then(|provider| provider.model.clone())
+            })
+            .or_else(|| provider_default_model("anthropic").map(|value| value.to_string()))
+            .map(|value| value.trim_start_matches("anthropic/").to_string());
+
+        let desired = ProviderConfig {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            provider_type: "anthropic".into(),
+            auth_mode,
+            base_url: None,
+            model,
+            fallback_models: store
+                .providers
+                .get("anthropic")
+                .and_then(|provider| provider.fallback_models.clone()),
+            fallback_provider_ids: store
+                .providers
+                .get("anthropic")
+                .and_then(|provider| provider.fallback_provider_ids.clone()),
+            enabled: store
+                .providers
+                .get("anthropic")
+                .map(|provider| provider.enabled)
+                .unwrap_or(true),
+            created_at: store
+                .providers
+                .get("anthropic")
+                .map(|provider| provider.created_at.clone())
+                .unwrap_or_else(now_iso_string),
+            updated_at: now_iso_string(),
+        };
+
+        let needs_update = store
+            .providers
+            .get("anthropic")
+            .map(|existing| {
+                existing.name != desired.name
+                    || existing.provider_type != desired.provider_type
+                    || existing.auth_mode != desired.auth_mode
+                    || existing.base_url != desired.base_url
+                    || existing.model != desired.model
+                    || existing.enabled != desired.enabled
+            })
+            .unwrap_or(true);
+
+        if needs_update {
+            store.providers.insert("anthropic".into(), desired);
+            changed = true;
+        }
+    }
+
+    if default_model
+        .as_deref()
+        .map(|value| value.starts_with("anthropic/"))
+        .unwrap_or(false)
+        && store.default_provider.as_deref() != Some("anthropic")
+    {
+        store.default_provider = Some("anthropic".into());
         changed = true;
     }
 
@@ -3922,6 +4003,31 @@ fn provider_has_auth_profile(provider_key: &str) -> bool {
     })
 }
 
+fn provider_auth_profile_type(provider_key: &str) -> Option<String> {
+    for agent_id in discover_agent_ids() {
+        let store = read_auth_profiles(&agent_id);
+        let profile_id = format!("{provider_key}:default");
+        if let Some(profile) = store
+            .profiles
+            .get(&profile_id)
+            .or_else(|| {
+                store.profiles.values().find(|profile| {
+                    profile
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .map(|value| value == provider_key)
+                        .unwrap_or(false)
+                })
+            })
+        {
+            if let Some(kind) = profile.get("type").and_then(Value::as_str) {
+                return Some(kind.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn provider_default_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "anthropic" => Some("anthropic/claude-opus-4-6"),
@@ -4057,6 +4163,35 @@ fn save_provider_key_to_openclaw(provider_key: &str, api_key: &str) -> Result<()
                 "type": "api_key",
                 "provider": provider_key,
                 "key": api_key,
+            }),
+        );
+        store
+            .order
+            .entry(provider_key.to_string())
+            .or_default()
+            .retain(|value| value != &profile_id);
+        store
+            .order
+            .entry(provider_key.to_string())
+            .or_default()
+            .push(profile_id.clone());
+        store.last_good.insert(provider_key.to_string(), profile_id);
+        write_auth_profiles(&agent_id, &store)?;
+    }
+
+    Ok(())
+}
+
+fn save_provider_token_to_openclaw(provider_key: &str, token: &str) -> Result<(), String> {
+    for agent_id in discover_agent_ids() {
+        let mut store = read_auth_profiles(&agent_id);
+        let profile_id = format!("{provider_key}:default");
+        store.profiles.insert(
+            profile_id.clone(),
+            json!({
+                "type": "token",
+                "provider": provider_key,
+                "token": token,
             }),
         );
         store
@@ -4366,6 +4501,15 @@ fn sync_provider_state_to_openclaw(
     config: &ProviderConfig,
     api_key: Option<&str>,
 ) -> Result<(), String> {
+    sync_provider_state_to_openclaw_with_token(store, config, api_key, None)
+}
+
+fn sync_provider_state_to_openclaw_with_token(
+    store: &ProviderStore,
+    config: &ProviderConfig,
+    api_key: Option<&str>,
+    token: Option<&str>,
+) -> Result<(), String> {
     let provider_key = get_openclaw_provider_key(&config.provider_type, &config.id);
     let resolved_api_key = api_key
         .filter(|value| !value.trim().is_empty())
@@ -4379,7 +4523,9 @@ fn sync_provider_state_to_openclaw(
     let api = provider_api(&config.provider_type);
     let headers = provider_headers(&config.provider_type);
 
-    if let Some(api_key) = resolved_api_key {
+    if let Some(token) = token.filter(|value| !value.trim().is_empty()) {
+        save_provider_token_to_openclaw(&provider_key, token)?;
+    } else if let Some(api_key) = resolved_api_key {
         save_provider_key_to_openclaw(&provider_key, api_key)?;
     }
 
@@ -6621,6 +6767,7 @@ fn persist_oauth_provider_success(
         id: provider_type.to_string(),
         name: oauth_provider_name(provider_type),
         provider_type: provider_type.to_string(),
+        auth_mode: Some("oauth".into()),
         base_url: match provider_type {
             "openai-codex" => None,
             _ => Some(base_url.clone()),
@@ -8999,6 +9146,26 @@ fn invoke_ipc(
             }
             save_provider_store(&store)?;
             let _ = sync_provider_state_to_openclaw(&store, &config, api_key.as_deref());
+            maybe_restart_gateway(&app, &state);
+            Ok(json!({ "success": true }))
+        }
+        "provider:saveTokenAuth" => {
+            let config: ProviderConfig =
+                serde_json::from_value(args.get(0).cloned().unwrap_or(Value::Null))
+                    .map_err(|err| err.to_string())?;
+            let token = args
+                .get(1)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "Token auth value is required".to_string())?;
+            let mut store = load_provider_store();
+            let mut config = config;
+            config.auth_mode = Some("token".into());
+            store.providers.insert(config.id.clone(), config.clone());
+            store.api_keys.remove(&config.id);
+            save_provider_store(&store)?;
+            sync_provider_state_to_openclaw_with_token(&store, &config, None, Some(&token))?;
             maybe_restart_gateway(&app, &state);
             Ok(json!({ "success": true }))
         }
