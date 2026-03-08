@@ -45,10 +45,19 @@
         "validateConfig": "Validate Configuration",
         "generatingQR": "Generating QR...",
         "validatingAndSaving": "Validating & Saving...",
+        "installingPlugin": "Installing plugin...",
+        "savingAndRestarting": "Saving & restarting gateway...",
         "generateQRCode": "Generate QR Code",
         "updateAndReconnect": "Update & Reconnect",
         "saveAndConnect": "Save & Connect",
-        "envVar": "Environment Variable: {{var}}"
+        "envVar": "Environment Variable: {{var}}",
+        "pluginStatus": {
+            "loading": "Checking Matrix plugin status...",
+            "matrixMissing": "Matrix plugin is not installed yet. Clawy will install it when you save this channel.",
+            "matrixDisabled": "Matrix plugin is installed but disabled. Clawy will enable it when you save this channel.",
+            "matrixLoaded": "Matrix plugin is ready.",
+            "matrixError": "Matrix plugin is currently unavailable. Saving will retry the plugin setup."
+        }
     },
     "meta": {
         "telegram": {

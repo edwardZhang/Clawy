@@ -28,6 +28,8 @@
         "back": "Back",
         "next": "Next",
         "skip": "Skip",
+        "start": "Start",
+        "stop": "Stop",
         "restart": "Restart"
     },
     "status": {

@@ -367,10 +367,26 @@ class GatewayBridge {
 
     const status = await this.fetchRemoteStatus();
     this.status = status;
-    this.wantedRunning = status.state === 'starting' || status.state === 'reconnecting' || status.state === 'running';
+
+    let gatewayAutoStart = false;
+    try {
+      const settings = await this.invokeRemote<{ gatewayAutoStart?: boolean }>('settings:getAll');
+      gatewayAutoStart = settings.gatewayAutoStart === true;
+    } catch {
+      // Ignore settings fetch failures and fall back to the remote status only.
+    }
+
+    const shouldAutoStart =
+      gatewayAutoStart && (status.state === 'stopped' || status.state === 'error');
+
+    this.wantedRunning =
+      shouldAutoStart ||
+      status.state === 'starting' ||
+      status.state === 'reconnecting' ||
+      status.state === 'running';
 
     if (this.wantedRunning) {
-      void this.ensureConnected(false, 45_000).catch((error) => {
+      void this.ensureConnected(shouldAutoStart, 45_000).catch((error) => {
         const message = toErrorMessage(error, 'Failed to connect to Gateway');
         this.setStatus({
           ...this.status,
