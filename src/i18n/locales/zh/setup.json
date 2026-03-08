@@ -43,6 +43,8 @@
         "nodejs": "Node.js 运行时",
         "openclaw": "OpenClaw 包",
         "gateway": "网关服务",
+        "installNode": "安装托管 Node.js",
+        "installOpenClaw": "安装 OpenClaw",
         "startGateway": "启动网关",
         "cards": {
             "node": {
@@ -73,6 +75,10 @@
             "waitingForDependencies": "等待 Node.js 和 OpenClaw 先通过检查。",
             "nodeMissing": "没有可用的兼容 Node.js 运行时。",
             "openclawMissing": "没有可用的兼容 OpenClaw 包。",
+            "installingNode": "正在安装托管 Node.js 运行时...",
+            "installingOpenClaw": "正在安装 OpenClaw 包...",
+            "nodeInstallFailed": "托管 Node.js 安装失败。",
+            "openclawInstallFailed": "OpenClaw 安装失败。",
             "checkFailed": "检查失败：{{error}}"
         },
         "issue": {
@@ -83,6 +89,10 @@
             "pendingTitle": "运行时检查仍在进行中",
             "pending": "Clawy 正在验证运行时环境。在三个卡片全部就绪前，“下一步”会保持禁用。",
             "readyWhenAllPass": "必须让三个卡片都显示“已就绪”，才能继续下一步设置。"
+        },
+        "toast": {
+            "nodeInstalled": "已安装托管 Node.js {{version}}。",
+            "openclawInstalled": "已安装 OpenClaw {{version}}。"
         },
         "logs": {
             "title": "应用程序日志",

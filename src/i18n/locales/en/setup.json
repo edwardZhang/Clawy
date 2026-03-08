@@ -43,6 +43,8 @@
         "nodejs": "Node.js Runtime",
         "openclaw": "OpenClaw Package",
         "gateway": "Gateway Service",
+        "installNode": "Install Managed Node.js",
+        "installOpenClaw": "Install OpenClaw",
         "startGateway": "Start Gateway",
         "cards": {
             "node": {
@@ -73,6 +75,10 @@
             "waitingForDependencies": "Waiting for Node.js and OpenClaw to pass first.",
             "nodeMissing": "No compatible Node.js runtime is available.",
             "openclawMissing": "No compatible OpenClaw package is available.",
+            "installingNode": "Installing managed Node.js runtime...",
+            "installingOpenClaw": "Installing OpenClaw package...",
+            "nodeInstallFailed": "Managed Node.js installation failed.",
+            "openclawInstallFailed": "OpenClaw installation failed.",
             "checkFailed": "Check failed: {{error}}"
         },
         "issue": {
@@ -83,6 +89,10 @@
             "pendingTitle": "Runtime checks are still in progress",
             "pending": "Clawy is still validating the runtime environment. Next stays disabled until all three cards are ready.",
             "readyWhenAllPass": "All three cards must show Ready before you can continue to the next setup step."
+        },
+        "toast": {
+            "nodeInstalled": "Managed Node.js {{version}} installed.",
+            "openclawInstalled": "OpenClaw {{version}} installed."
         },
         "logs": {
             "title": "Application Logs",
