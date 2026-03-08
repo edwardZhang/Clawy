@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::menu::{MenuBuilder, MenuEvent, SubmenuBuilder};
@@ -216,6 +216,7 @@ struct UpdaterRuntime {
 #[derive(Default)]
 struct OAuthRuntime {
     child: Option<Child>,
+    stdin: Option<ChildStdin>,
     provider: Option<String>,
 }
 
@@ -3145,11 +3146,109 @@ fn save_settings(settings: &Settings) -> Result<(), String> {
 }
 
 fn load_provider_store() -> ProviderStore {
-    read_json_or_default(&providers_path())
+    let mut store: ProviderStore = read_json_or_default(&providers_path());
+    let changed = sync_provider_store_from_openclaw(&mut store);
+    if changed {
+        let _ = save_provider_store(&store);
+    }
+    store
 }
 
 fn save_provider_store(store: &ProviderStore) -> Result<(), String> {
     write_json(&providers_path(), store)
+}
+
+fn sync_provider_store_from_openclaw(store: &mut ProviderStore) -> bool {
+    let Ok(config) = read_openclaw_json() else {
+        return false;
+    };
+
+    let default_model = config
+        .get("agents")
+        .and_then(Value::as_object)
+        .and_then(|agents| agents.get("defaults"))
+        .and_then(Value::as_object)
+        .and_then(|defaults| defaults.get("model"))
+        .and_then(Value::as_object)
+        .and_then(|model| model.get("primary"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let mut changed = false;
+
+    if provider_has_auth_profile("openai-codex") {
+        let model = default_model
+            .as_deref()
+            .filter(|value| value.starts_with("openai-codex/"))
+            .and_then(|value| value.strip_prefix("openai-codex/"))
+            .map(str::to_string)
+            .or_else(|| {
+                store
+                    .providers
+                    .get("openai-codex")
+                    .and_then(|provider| provider.model.clone())
+            })
+            .or_else(|| provider_default_model("openai-codex").map(|value| value.to_string()))
+            .map(|value| value.trim_start_matches("openai-codex/").to_string());
+
+        let desired = ProviderConfig {
+            id: "openai-codex".into(),
+            name: "Codex".into(),
+            provider_type: "openai-codex".into(),
+            base_url: None,
+            model,
+            fallback_models: store
+                .providers
+                .get("openai-codex")
+                .and_then(|provider| provider.fallback_models.clone()),
+            fallback_provider_ids: store
+                .providers
+                .get("openai-codex")
+                .and_then(|provider| provider.fallback_provider_ids.clone()),
+            enabled: store
+                .providers
+                .get("openai-codex")
+                .map(|provider| provider.enabled)
+                .unwrap_or(true),
+            created_at: store
+                .providers
+                .get("openai-codex")
+                .map(|provider| provider.created_at.clone())
+                .unwrap_or_else(now_iso_string),
+            updated_at: now_iso_string(),
+        };
+
+        let needs_update = store
+            .providers
+            .get("openai-codex")
+            .map(|existing| {
+                existing.name != desired.name
+                    || existing.provider_type != desired.provider_type
+                    || existing.base_url != desired.base_url
+                    || existing.model != desired.model
+                    || existing.enabled != desired.enabled
+            })
+            .unwrap_or(true);
+
+        if needs_update {
+            store
+                .providers
+                .insert("openai-codex".into(), desired.clone());
+            changed = true;
+        }
+    }
+
+    if default_model
+        .as_deref()
+        .map(|value| value.starts_with("openai-codex/"))
+        .unwrap_or(false)
+        && store.default_provider.as_deref() != Some("openai-codex")
+    {
+        store.default_provider = Some("openai-codex".into());
+        changed = true;
+    }
+
+    changed
 }
 
 fn current_log_file_path() -> PathBuf {
@@ -3629,9 +3728,11 @@ fn list_providers(store: &ProviderStore) -> Vec<ProviderWithKeyInfo> {
         .cloned()
         .map(|config| {
             let key = store.api_keys.get(&config.id);
+            let provider_key = get_openclaw_provider_key(&config.provider_type, &config.id);
+            let has_oauth_profile = provider_has_auth_profile(&provider_key);
             ProviderWithKeyInfo {
                 config,
-                has_key: key.is_some(),
+                has_key: key.is_some() || has_oauth_profile,
                 key_masked: key.map(|value| mask_key(value)),
             }
         })
@@ -3808,10 +3909,24 @@ fn write_auth_profiles(agent_id: &str, store: &AuthProfilesStore) -> Result<(), 
     write_json(&auth_profiles_path(agent_id), store)
 }
 
+fn provider_has_auth_profile(provider_key: &str) -> bool {
+    discover_agent_ids().into_iter().any(|agent_id| {
+        let store = read_auth_profiles(&agent_id);
+        store.profiles.values().any(|profile| {
+            profile
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(|value| value == provider_key)
+                .unwrap_or(false)
+        })
+    })
+}
+
 fn provider_default_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "anthropic" => Some("anthropic/claude-opus-4-6"),
         "openai" => Some("openai/gpt-5.2"),
+        "openai-codex" => Some("openai-codex/gpt-5.3-codex"),
         "google" => Some("google/gemini-3.1-pro-preview"),
         "openrouter" => Some("openrouter/anthropic/claude-opus-4.6"),
         "moonshot" => Some("moonshot/kimi-k2.5"),
@@ -3966,20 +4081,23 @@ fn save_oauth_token_to_openclaw(
     access: &str,
     refresh: &str,
     expires: u64,
+    account_id: Option<&str>,
 ) -> Result<(), String> {
     for agent_id in discover_agent_ids() {
         let mut store = read_auth_profiles(&agent_id);
         let profile_id = format!("{provider_key}:default");
-        store.profiles.insert(
-            profile_id.clone(),
-            json!({
-                "type": "oauth",
-                "provider": provider_key,
-                "access": access,
-                "refresh": refresh,
-                "expires": expires,
-            }),
-        );
+        let mut profile = Map::new();
+        profile.insert("type".into(), Value::String("oauth".into()));
+        profile.insert("provider".into(), Value::String(provider_key.to_string()));
+        profile.insert("access".into(), Value::String(access.to_string()));
+        profile.insert("refresh".into(), Value::String(refresh.to_string()));
+        profile.insert("expires".into(), Value::Number(expires.into()));
+        if let Some(account_id) = account_id.filter(|value| !value.trim().is_empty()) {
+            profile.insert("accountId".into(), Value::String(account_id.to_string()));
+        }
+        store
+            .profiles
+            .insert(profile_id.clone(), Value::Object(profile));
         store
             .order
             .entry(provider_key.to_string())
@@ -6401,6 +6519,7 @@ fn kill_child_process(child: &mut Child) {
 
 fn oauth_provider_name(provider_type: &str) -> String {
     match provider_type {
+        "openai-codex" => "Codex".into(),
         "minimax-portal" => "MiniMax (Global)".into(),
         "minimax-portal-cn" => "MiniMax (CN)".into(),
         "qwen-portal" => "Qwen".into(),
@@ -6410,6 +6529,7 @@ fn oauth_provider_name(provider_type: &str) -> String {
 
 fn normalize_oauth_base_url(provider_type: &str, resource_url: Option<&str>) -> String {
     let default_base_url = match provider_type {
+        "openai-codex" => "https://api.openai.com/v1",
         "minimax-portal" => "https://api.minimax.io/anthropic",
         "minimax-portal-cn" => "https://api.minimaxi.com/anthropic",
         "qwen-portal" => "https://portal.qwen.ai/v1",
@@ -6460,10 +6580,12 @@ fn persist_oauth_provider_success(
         .get("expires")
         .and_then(Value::as_u64)
         .ok_or_else(|| "OAuth expiry is missing".to_string())?;
+    let account_id = token.get("accountId").and_then(Value::as_str);
     let api = token
         .get("api")
         .and_then(Value::as_str)
         .unwrap_or_else(|| match provider_type {
+            "openai-codex" => "openai-codex-responses",
             "qwen-portal" => "openai-completions",
             _ => "anthropic-messages",
         });
@@ -6474,10 +6596,10 @@ fn persist_oauth_provider_success(
     } else {
         provider_type
     };
-    let api_key_env = if token_provider_key == "minimax-portal" {
-        "minimax-oauth"
-    } else {
-        "qwen-oauth"
+    let api_key_env = match token_provider_key {
+        "minimax-portal" => Some("minimax-oauth"),
+        "qwen-portal" => Some("qwen-oauth"),
+        _ => None,
     };
     let auth_header = if token_provider_key == "minimax-portal" {
         Some(true)
@@ -6485,7 +6607,7 @@ fn persist_oauth_provider_success(
         None
     };
 
-    save_oauth_token_to_openclaw(token_provider_key, access, refresh, expires)?;
+    save_oauth_token_to_openclaw(token_provider_key, access, refresh, expires, account_id)?;
 
     let mut store = load_provider_store();
     let existing = store.providers.get(provider_type).cloned();
@@ -6499,7 +6621,10 @@ fn persist_oauth_provider_success(
         id: provider_type.to_string(),
         name: oauth_provider_name(provider_type),
         provider_type: provider_type.to_string(),
-        base_url: Some(base_url.clone()),
+        base_url: match provider_type {
+            "openai-codex" => None,
+            _ => Some(base_url.clone()),
+        },
         model: existing
             .as_ref()
             .and_then(|config| config.model.clone())
@@ -6526,17 +6651,21 @@ fn persist_oauth_provider_success(
     let model_ref = get_provider_model_ref(&config)
         .ok_or_else(|| format!("No default model configured for {provider_type}"))?;
     let fallback_models = get_provider_fallback_model_refs(&config, &store);
-    set_openclaw_default_model_with_override(
-        token_provider_key,
-        &model_ref,
-        &fallback_models,
-        Some(&base_url),
-        Some(api),
-        None,
-        Some(api_key_env),
-        None,
-        auth_header,
-    )?;
+    if provider_type == "openai-codex" {
+        set_openclaw_default_model(token_provider_key, &model_ref, &fallback_models)?;
+    } else {
+        set_openclaw_default_model_with_override(
+            token_provider_key,
+            &model_ref,
+            &fallback_models,
+            Some(&base_url),
+            Some(api),
+            None,
+            api_key_env,
+            None,
+            auth_header,
+        )?;
+    }
 
     maybe_restart_gateway(app, state);
     let _ = app.emit(
@@ -6577,11 +6706,28 @@ fn handle_oauth_runner_stdout(
                 "code" => {
                     let payload = json!({
                         "provider": provider.as_str(),
+                        "authKind": message.get("authKind").cloned().unwrap_or_else(|| json!("device-code")),
                         "verificationUri": message.get("verificationUri").cloned().unwrap_or(Value::Null),
                         "userCode": message.get("userCode").cloned().unwrap_or(Value::Null),
                         "expiresIn": message.get("expiresIn").cloned().unwrap_or(json!(300)),
+                        "instructions": message.get("instructions").cloned().unwrap_or(Value::Null),
                     });
                     let _ = app.emit("oauth:code", payload);
+                }
+                "prompt" => {
+                    let payload = json!({
+                        "provider": provider.as_str(),
+                        "message": message.get("message").cloned().unwrap_or_else(|| json!("Paste the authorization code (or full redirect URL):")),
+                        "placeholder": message.get("placeholder").cloned().unwrap_or(Value::Null),
+                    });
+                    let _ = app.emit("oauth:prompt", payload);
+                }
+                "progress" => {
+                    let payload = json!({
+                        "provider": provider.as_str(),
+                        "message": message.get("message").cloned().unwrap_or(Value::Null),
+                    });
+                    let _ = app.emit("oauth:progress", payload);
                 }
                 "success" => {
                     let resolved_provider = message
@@ -6631,11 +6777,13 @@ fn start_oauth_flow(
     }
 
     let mut command = node_command()?;
+    let openclaw_runtime_dir = get_openclaw_dir();
     command
         .arg(&script_path)
         .arg(provider_type)
         .current_dir(current_workspace_dir())
-        .stdin(Stdio::null())
+        .env("OPENCLAW_RUNTIME_DIR", openclaw_runtime_dir)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if provider_type == "minimax-portal-cn" {
@@ -6645,6 +6793,7 @@ fn start_oauth_flow(
     let mut child = command
         .spawn()
         .map_err(|err| format!("Failed to launch OAuth runner: {err}"))?;
+    let stdin = child.stdin.take();
     if let Some(stdout) = child.stdout.take() {
         handle_oauth_runner_stdout(
             app.clone(),
@@ -6662,6 +6811,7 @@ fn start_oauth_flow(
         .lock()
         .map_err(|_| "OAuth runtime lock poisoned".to_string())?;
     runtime.child = Some(child);
+    runtime.stdin = stdin;
     runtime.provider = Some(provider_type.to_string());
     Ok(json!({ "success": true }))
 }
@@ -6675,6 +6825,7 @@ fn cancel_oauth_flow(state: &BridgeState) -> Result<(), String> {
         kill_child_process(child);
     }
     runtime.child = None;
+    runtime.stdin = None;
     runtime.provider = None;
     Ok(())
 }
@@ -6797,6 +6948,7 @@ fn start_oauth_monitor(state: BridgeState) {
                 .is_some();
             if exited {
                 runtime.child = None;
+                runtime.stdin = None;
                 runtime.provider = None;
             }
         }
@@ -8973,6 +9125,28 @@ fn invoke_ipc(
         "provider:requestOAuth" => {
             let provider = args.get(0).and_then(Value::as_str).unwrap_or_default();
             start_oauth_flow(&app, &state, provider)
+        }
+        "provider:submitOAuthInput" => {
+            let input = args
+                .get(0)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let mut runtime = state
+                .oauth_runtime
+                .lock()
+                .map_err(|_| "OAuth runtime lock poisoned".to_string())?;
+            let stdin = runtime
+                .stdin
+                .as_mut()
+                .ok_or_else(|| "No active OAuth input channel".to_string())?;
+            stdin
+                .write_all(format!("{input}\n").as_bytes())
+                .map_err(|err| format!("Failed to submit OAuth input: {err}"))?;
+            stdin
+                .flush()
+                .map_err(|err| format!("Failed to flush OAuth input: {err}"))?;
+            Ok(json!({ "success": true }))
         }
         "provider:cancelOAuth" => {
             cancel_oauth_flow(&state)?;
