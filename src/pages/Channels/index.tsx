@@ -354,17 +354,33 @@ interface AddChannelDialogProps {
   onChannelAdded: () => void;
 }
 
+interface ChannelPluginStatus {
+  required: boolean;
+  channelType: string;
+  pluginId?: string;
+  installed: boolean;
+  enabled: boolean;
+  status?: 'loaded' | 'disabled' | 'error' | 'missing' | string;
+  origin?: 'bundled' | 'npm' | 'path' | 'legacy-mirror' | 'unknown' | string;
+  message?: string;
+}
+
+type ConnectStage = 'validating' | 'installingPlugin' | 'saving';
+
 function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded }: AddChannelDialogProps) {
   const { t } = useTranslation('channels');
   const { addChannel } = useChannelsStore();
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [channelName, setChannelName] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [connectStage, setConnectStage] = useState<ConnectStage>('validating');
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [loadingConfig, setLoadingConfig] = useState(false);
   const [isExistingConfig, setIsExistingConfig] = useState(false);
+  const [pluginStatus, setPluginStatus] = useState<ChannelPluginStatus | null>(null);
+  const [pluginStatusLoading, setPluginStatusLoading] = useState(false);
   const firstInputRef = useRef<HTMLInputElement>(null);
   const [validationResult, setValidationResult] = useState<{
     valid: boolean;
@@ -380,6 +396,8 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
       setConfigValues({});
       setChannelName('');
       setIsExistingConfig(false);
+      setPluginStatus(null);
+      setPluginStatusLoading(false);
       setChannelName('');
       setIsExistingConfig(false);
       // Ensure we clean up any pending QR session if switching away
@@ -417,6 +435,48 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
     })();
 
     return () => { cancelled = true; };
+  }, [selectedType]);
+
+  useEffect(() => {
+    if (selectedType !== 'matrix') {
+      setPluginStatus(null);
+      setPluginStatusLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setPluginStatusLoading(true);
+
+    desktopApi.ipcRenderer
+      .invoke('channel:getPluginStatus', selectedType)
+      .then((result) => {
+        if (!cancelled) {
+          setPluginStatus(result as ChannelPluginStatus);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setPluginStatus({
+            required: true,
+            channelType: selectedType,
+            pluginId: 'matrix',
+            installed: false,
+            enabled: false,
+            status: 'error',
+            origin: 'unknown',
+            message: String(error),
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPluginStatusLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedType]);
 
   // Focus first input when form is ready (avoids Windows focus loss after native dialogs)
@@ -533,6 +593,7 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
     if (!selectedType || !meta) return;
 
     setConnecting(true);
+    setConnectStage('validating');
     setValidationResult(null);
 
     try {
@@ -593,15 +654,22 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
 
       // Step 2: Save channel configuration via IPC
       const config: Record<string, unknown> = { ...configValues };
+      if (selectedType === 'matrix') {
+        setConnectStage(pluginStatus?.status === 'loaded' ? 'saving' : 'installingPlugin');
+      } else {
+        setConnectStage('saving');
+      }
       const saveResult = await desktopApi.ipcRenderer.invoke('channel:saveConfig', selectedType, config) as {
         success?: boolean;
         error?: string;
         warning?: string;
-        pluginInstalled?: boolean;
+        pluginEnsured?: boolean;
+        pluginAction?: 'none' | 'enabled' | 'installed' | 'legacy-installed';
       };
       if (!saveResult?.success) {
         throw new Error(saveResult?.error || 'Failed to save channel config');
       }
+      setConnectStage('saving');
       if (typeof saveResult.warning === 'string' && saveResult.warning) {
         toast.warning(saveResult.warning);
       }
@@ -624,10 +692,22 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
 
       // Brief delay so user can see the success state before dialog closes
       await new Promise((resolve) => setTimeout(resolve, 800));
+      if (selectedType === 'matrix') {
+        setPluginStatus({
+          required: true,
+          channelType: 'matrix',
+          pluginId: 'matrix',
+          installed: true,
+          enabled: true,
+          status: 'loaded',
+          origin: pluginStatus?.origin || 'bundled',
+        });
+      }
       onChannelAdded();
     } catch (error) {
       toast.error(t('toast.configFailed', { error }));
       setConnecting(false);
+      setConnectStage('validating');
     }
   };
 
@@ -666,6 +746,45 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
   const toggleSecretVisibility = (key: string) => {
     setShowSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
   };
+
+  const pluginStatusTone = (() => {
+    switch (pluginStatus?.status) {
+      case 'loaded':
+        return 'bg-green-500/10 text-green-600 dark:text-green-400';
+      case 'error':
+        return 'bg-destructive/10 text-destructive';
+      default:
+        return 'bg-blue-500/10 text-blue-600 dark:text-blue-400';
+    }
+  })();
+
+  const pluginStatusMessage = (() => {
+    switch (pluginStatus?.status) {
+      case 'missing':
+        return t('dialog.pluginStatus.matrixMissing');
+      case 'disabled':
+        return t('dialog.pluginStatus.matrixDisabled');
+      case 'loaded':
+        return t('dialog.pluginStatus.matrixLoaded');
+      case 'error':
+        return pluginStatus.message || t('dialog.pluginStatus.matrixError');
+      default:
+        return null;
+    }
+  })();
+
+  const connectButtonLabel = (() => {
+    if (meta?.connectionType === 'qr') {
+      return t('dialog.generatingQR');
+    }
+    if (connectStage === 'installingPlugin') {
+      return t('dialog.installingPlugin');
+    }
+    if (connectStage === 'saving') {
+      return t('dialog.savingAndRestarting');
+    }
+    return t('dialog.validating');
+  })();
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
@@ -749,6 +868,30 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
                   <CheckCircle className="h-4 w-4 shrink-0" />
                   <span>{t('dialog.existingHint')}</span>
                 </div>
+              )}
+
+              {/* Matrix plugin status */}
+              {selectedType === 'matrix' && (
+                pluginStatusLoading ? (
+                  <div className="bg-muted p-3 rounded-lg text-sm flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                    <span>{t('dialog.pluginStatus.loading')}</span>
+                  </div>
+                ) : pluginStatusMessage ? (
+                  <div className={`p-3 rounded-lg text-sm flex items-start gap-2 ${pluginStatusTone}`}>
+                    {pluginStatus?.status === 'loaded' ? (
+                      <CheckCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p>{pluginStatusMessage}</p>
+                      {pluginStatus?.message && pluginStatus.status !== 'error' && (
+                        <p className="text-xs mt-1 opacity-80">{pluginStatus.message}</p>
+                      )}
+                    </div>
+                  </div>
+                ) : null
               )}
 
               {/* Instructions */}
@@ -873,7 +1016,7 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
                     {connecting ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        {meta?.connectionType === 'qr' ? t('dialog.generatingQR') : t('dialog.validatingAndSaving')}
+                        {connectButtonLabel}
                       </>
                     ) : meta?.connectionType === 'qr' ? (
                       t('dialog.generateQRCode')

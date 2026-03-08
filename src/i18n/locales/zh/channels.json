@@ -45,10 +45,19 @@
         "validateConfig": "验证配置",
         "generatingQR": "正在生成二维码...",
         "validatingAndSaving": "正在验证并保存...",
+        "installingPlugin": "正在安装插件...",
+        "savingAndRestarting": "正在保存并重启网关...",
         "generateQRCode": "生成二维码",
         "updateAndReconnect": "更新并重新连接",
         "saveAndConnect": "保存并连接",
-        "envVar": "环境变量: {{var}}"
+        "envVar": "环境变量: {{var}}",
+        "pluginStatus": {
+            "loading": "正在检查 Matrix 插件状态...",
+            "matrixMissing": "Matrix 插件尚未安装。保存此频道时，Clawy 会自动安装它。",
+            "matrixDisabled": "Matrix 插件已安装但未启用。保存此频道时，Clawy 会自动启用它。",
+            "matrixLoaded": "Matrix 插件已可用。",
+            "matrixError": "Matrix 插件当前不可用。保存时会再次尝试修复插件。"
+        }
     },
     "meta": {
         "telegram": {

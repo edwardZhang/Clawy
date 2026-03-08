@@ -45,10 +45,19 @@
         "validateConfig": "設定を検証",
         "generatingQR": "QRコードを生成中...",
         "validatingAndSaving": "検証して保存中...",
+        "installingPlugin": "プラグインをインストール中...",
+        "savingAndRestarting": "保存してゲートウェイを再起動中...",
         "generateQRCode": "QRコードを生成",
         "updateAndReconnect": "更新して再接続",
         "saveAndConnect": "保存して接続",
-        "envVar": "環境変数: {{var}}"
+        "envVar": "環境変数: {{var}}",
+        "pluginStatus": {
+            "loading": "Matrix プラグインの状態を確認しています...",
+            "matrixMissing": "Matrix プラグインはまだインストールされていません。このチャンネルを保存するときに Clawy が自動でインストールします。",
+            "matrixDisabled": "Matrix プラグインはインストール済みですが無効です。このチャンネルを保存するときに Clawy が自動で有効化します。",
+            "matrixLoaded": "Matrix プラグインは利用可能です。",
+            "matrixError": "Matrix プラグインは現在利用できません。保存時に再度セットアップを試みます。"
+        }
     },
     "meta": {
         "telegram": {

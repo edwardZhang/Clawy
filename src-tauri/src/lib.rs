@@ -1220,7 +1220,11 @@ fn managed_uv_staging_dir_from_base(base_dir: &Path) -> PathBuf {
 }
 
 fn managed_uv_binary_name() -> &'static str {
-    if cfg!(windows) { "uv.exe" } else { "uv" }
+    if cfg!(windows) {
+        "uv.exe"
+    } else {
+        "uv"
+    }
 }
 
 fn managed_uv_binary_path_from_base(base_dir: &Path) -> PathBuf {
@@ -1757,7 +1761,9 @@ fn restore_managed_runtime_selection_in_base(
     let mut state = load_or_create_managed_runtime_state_in_base(base_dir)?;
     state.clear_current_version(kind);
     save_managed_runtime_state_to_base(base_dir, &state)?;
-    remove_path_if_exists(&managed_runtime_current_pointer_path_from_base(base_dir, kind))
+    remove_path_if_exists(&managed_runtime_current_pointer_path_from_base(
+        base_dir, kind,
+    ))
 }
 
 fn find_first_file_named(root: &Path, file_name: &str) -> Option<PathBuf> {
@@ -1833,10 +1839,7 @@ fn emit_openclaw_update_status_event(
     let _ = app.emit("openclaw:update-status-changed", payload);
 }
 
-fn begin_runtime_install(
-    state: &BridgeState,
-    kind: ManagedRuntimeKind,
-) -> Result<bool, String> {
+fn begin_runtime_install(state: &BridgeState, kind: ManagedRuntimeKind) -> Result<bool, String> {
     let mut runtime = state
         .runtime_install_runtime
         .lock()
@@ -1891,13 +1894,9 @@ fn spawn_openclaw_update_status_refresh_task(
                 Some(payload),
                 None,
             ),
-            Err(error) => emit_openclaw_update_status_event(
-                &app_handle,
-                mode,
-                "failed",
-                None,
-                Some(error),
-            ),
+            Err(error) => {
+                emit_openclaw_update_status_event(&app_handle, mode, "failed", None, Some(error))
+            }
         }
     });
 }
@@ -2296,7 +2295,9 @@ fn node_distribution_os() -> Result<&'static str, String> {
         "macos" => Ok("darwin"),
         "windows" => Ok("win"),
         "linux" => Ok("linux"),
-        other => Err(format!("Managed Node downloads are not supported on `{other}`")),
+        other => Err(format!(
+            "Managed Node downloads are not supported on `{other}`"
+        )),
     }
 }
 
@@ -2304,7 +2305,9 @@ fn node_distribution_arch() -> Result<&'static str, String> {
     match std::env::consts::ARCH {
         "aarch64" => Ok("arm64"),
         "x86_64" => Ok("x64"),
-        other => Err(format!("Managed Node downloads are not supported on `{other}`")),
+        other => Err(format!(
+            "Managed Node downloads are not supported on `{other}`"
+        )),
     }
 }
 
@@ -2341,9 +2344,7 @@ fn resolve_recommended_managed_node_payload_with_client(
             (file_name == archive_name).then_some(digest.to_string())
         })
         .ok_or_else(|| {
-            format!(
-                "Managed Node checksums did not include `{archive_name}` for version {version}"
-            )
+            format!("Managed Node checksums did not include `{archive_name}` for version {version}")
         })?;
 
     Ok(ManagedNodeInstallPayload {
@@ -2373,7 +2374,9 @@ fn openclaw_registry_package_url(registry_base_url: &str) -> String {
 fn fetch_openclaw_registry_latest_version() -> Result<String, String> {
     let client = reqwest_client()?;
     let metadata = client
-        .get(openclaw_registry_package_url(OPENCLAW_NPM_REGISTRY_BASE_URL))
+        .get(openclaw_registry_package_url(
+            OPENCLAW_NPM_REGISTRY_BASE_URL,
+        ))
         .send()
         .map_err(|err| format!("Failed to resolve OpenClaw dist-tags: {err}"))?
         .error_for_status()
@@ -2711,9 +2714,11 @@ fn install_managed_node_archive_in_base(
         }
     }
 
-    if let Err(err) =
-        activate_managed_runtime_version_in_base(base_dir, ManagedRuntimeKind::Node, trimmed_version)
-    {
+    if let Err(err) = activate_managed_runtime_version_in_base(
+        base_dir,
+        ManagedRuntimeKind::Node,
+        trimmed_version,
+    ) {
         let _ = remove_path_if_exists(&runtime_dir);
         restore_managed_runtime_selection_in_base(
             base_dir,
@@ -2888,8 +2893,9 @@ fn install_managed_openclaw_archive_in_base(
 
     let backup_dir = if runtime_dir.exists() {
         Some(
-            managed_runtime_staging_dir_from_base(base_dir, ManagedRuntimeKind::OpenClaw)
-                .join(format!(".backup-{trimmed_version}-{}", Uuid::new_v4().simple())),
+            managed_runtime_staging_dir_from_base(base_dir, ManagedRuntimeKind::OpenClaw).join(
+                format!(".backup-{trimmed_version}-{}", Uuid::new_v4().simple()),
+            ),
         )
     } else {
         None
@@ -3713,12 +3719,12 @@ fn openclaw_update_status(mode: OpenClawUpdateStatusMode) -> Result<Value, Strin
     let latest_version = fetch_openclaw_registry_latest_version().ok();
     let dry_run = match mode {
         OpenClawUpdateStatusMode::Summary => None,
-        OpenClawUpdateStatusMode::Full => run_openclaw_cli_json(&["update", "--dry-run", "--yes"]).ok(),
+        OpenClawUpdateStatusMode::Full => {
+            run_openclaw_cli_json(&["update", "--dry-run", "--yes"]).ok()
+        }
     };
 
-    let comparison_version = managed_version
-        .clone()
-        .or_else(|| current_version.clone());
+    let comparison_version = managed_version.clone().or_else(|| current_version.clone());
     let update_available = latest_version
         .as_deref()
         .zip(comparison_version.as_deref())
@@ -4007,19 +4013,15 @@ fn provider_auth_profile_type(provider_key: &str) -> Option<String> {
     for agent_id in discover_agent_ids() {
         let store = read_auth_profiles(&agent_id);
         let profile_id = format!("{provider_key}:default");
-        if let Some(profile) = store
-            .profiles
-            .get(&profile_id)
-            .or_else(|| {
-                store.profiles.values().find(|profile| {
-                    profile
-                        .get("provider")
-                        .and_then(Value::as_str)
-                        .map(|value| value == provider_key)
-                        .unwrap_or(false)
-                })
+        if let Some(profile) = store.profiles.get(&profile_id).or_else(|| {
+            store.profiles.values().find(|profile| {
+                profile
+                    .get("provider")
+                    .and_then(Value::as_str)
+                    .map(|value| value == provider_key)
+                    .unwrap_or(false)
             })
-        {
+        }) {
             if let Some(kind) = profile.get("type").and_then(Value::as_str) {
                 return Some(kind.to_string());
             }
@@ -4669,9 +4671,11 @@ fn openclaw_command() -> Result<Command, String> {
 
     let mut command = Command::new(node_binary);
     apply_proxy_env(&mut command, &load_settings());
-    command
-        .arg(entry)
-        .current_dir(openclaw_resolution.dir.unwrap_or_else(workspace_openclaw_dir));
+    command.arg(entry).current_dir(
+        openclaw_resolution
+            .dir
+            .unwrap_or_else(workspace_openclaw_dir),
+    );
     Ok(command)
 }
 
@@ -5175,6 +5179,297 @@ fn ensure_plugin_entries_map(config: &mut Value) -> &mut Map<String, Value> {
     ensure_object(entries)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelPluginInstallMode {
+    OpenClawCliManaged,
+    LegacyClawyManaged,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ChannelPluginPolicy {
+    plugin_id: &'static str,
+    install_mode: ChannelPluginInstallMode,
+    npm_spec: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ChannelPluginStatusPayload {
+    required: bool,
+    channel_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_id: Option<String>,
+    installed: bool,
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+impl ChannelPluginStatusPayload {
+    fn not_required(channel_type: &str) -> Self {
+        Self {
+            required: false,
+            channel_type: channel_type.to_string(),
+            plugin_id: None,
+            installed: false,
+            enabled: false,
+            status: None,
+            origin: None,
+            message: None,
+        }
+    }
+
+    fn missing(channel_type: &str, plugin_id: &str, message: Option<String>) -> Self {
+        Self {
+            required: true,
+            channel_type: channel_type.to_string(),
+            plugin_id: Some(plugin_id.to_string()),
+            installed: false,
+            enabled: false,
+            status: Some("missing".into()),
+            origin: None,
+            message,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EnsureChannelPluginResult {
+    plugin_ensured: bool,
+    plugin_action: &'static str,
+    warning: Option<String>,
+}
+
+fn channel_plugin_policy(channel_type: &str) -> Option<ChannelPluginPolicy> {
+    match channel_type {
+        "matrix" => Some(ChannelPluginPolicy {
+            plugin_id: "matrix",
+            install_mode: ChannelPluginInstallMode::OpenClawCliManaged,
+            npm_spec: Some("@openclaw/matrix"),
+        }),
+        "dingtalk" => Some(ChannelPluginPolicy {
+            plugin_id: "dingtalk",
+            install_mode: ChannelPluginInstallMode::LegacyClawyManaged,
+            npm_spec: None,
+        }),
+        _ => None,
+    }
+}
+
+fn parse_openclaw_plugin_status(
+    channel_type: &str,
+    plugin_id: &str,
+    plugins_json: &Value,
+) -> ChannelPluginStatusPayload {
+    let plugin = plugins_json
+        .get("plugins")
+        .and_then(Value::as_array)
+        .and_then(|plugins| {
+            plugins.iter().find(|plugin| {
+                plugin
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|value| value == plugin_id)
+                    .unwrap_or(false)
+            })
+        });
+
+    let Some(plugin) = plugin else {
+        return ChannelPluginStatusPayload::missing(channel_type, plugin_id, None);
+    };
+
+    let status = plugin
+        .get("status")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let enabled = plugin
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let origin = plugin
+        .get("origin")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| Some("unknown".into()));
+    let message = plugin
+        .get("error")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+
+    ChannelPluginStatusPayload {
+        required: true,
+        channel_type: channel_type.to_string(),
+        plugin_id: Some(plugin_id.to_string()),
+        installed: true,
+        enabled,
+        status,
+        origin,
+        message,
+    }
+}
+
+fn is_channel_plugin_ready(status: &ChannelPluginStatusPayload) -> bool {
+    if !status.required {
+        return true;
+    }
+
+    if status.status.as_deref() == Some("loaded") {
+        return true;
+    }
+
+    status.installed && status.enabled && status.status.as_deref() != Some("error")
+}
+
+fn get_openclaw_cli_managed_plugin_status(
+    channel_type: &str,
+    plugin_id: &str,
+) -> Result<ChannelPluginStatusPayload, String> {
+    let plugins_json = run_openclaw_cli_json(&["plugins", "list"])?;
+    Ok(parse_openclaw_plugin_status(
+        channel_type,
+        plugin_id,
+        &plugins_json,
+    ))
+}
+
+fn get_legacy_dingtalk_plugin_status() -> ChannelPluginStatusPayload {
+    let manifest_path = openclaw_config_dir()
+        .join("extensions")
+        .join("dingtalk")
+        .join("openclaw.plugin.json");
+    let installed = manifest_path.exists();
+
+    ChannelPluginStatusPayload {
+        required: true,
+        channel_type: "dingtalk".into(),
+        plugin_id: Some("dingtalk".into()),
+        installed,
+        enabled: installed,
+        status: Some(if installed { "loaded" } else { "missing" }.into()),
+        origin: Some(
+            if installed {
+                "legacy-mirror"
+            } else {
+                "unknown"
+            }
+            .into(),
+        ),
+        message: None,
+    }
+}
+
+fn get_channel_plugin_status_value(channel_type: &str) -> Result<Value, String> {
+    let Some(policy) = channel_plugin_policy(channel_type) else {
+        return Ok(json!(ChannelPluginStatusPayload::not_required(
+            channel_type
+        )));
+    };
+
+    let status = match policy.install_mode {
+        ChannelPluginInstallMode::OpenClawCliManaged => {
+            get_openclaw_cli_managed_plugin_status(channel_type, policy.plugin_id)?
+        }
+        ChannelPluginInstallMode::LegacyClawyManaged => get_legacy_dingtalk_plugin_status(),
+    };
+
+    Ok(json!(status))
+}
+
+fn run_openclaw_cli_command(args: &[&str], label: &str) -> Result<String, String> {
+    let mut command = openclaw_command()?;
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_command_capture(&mut command, label)
+}
+
+fn enable_openclaw_plugin(plugin_id: &str) -> Result<(), String> {
+    let label = format!("openclaw plugins enable {plugin_id}");
+    run_openclaw_cli_command(&["plugins", "enable", plugin_id], &label).map(|_| ())
+}
+
+fn install_openclaw_plugin(spec: &str) -> Result<(), String> {
+    let label = format!("openclaw plugins install {spec}");
+    run_openclaw_cli_command(&["plugins", "install", spec], &label).map(|_| ())
+}
+
+fn ensure_openclaw_cli_managed_channel_plugin(
+    channel_type: &str,
+    policy: ChannelPluginPolicy,
+) -> Result<EnsureChannelPluginResult, String> {
+    let mut status = get_openclaw_cli_managed_plugin_status(channel_type, policy.plugin_id)?;
+    if is_channel_plugin_ready(&status) {
+        return Ok(EnsureChannelPluginResult {
+            plugin_ensured: true,
+            plugin_action: "none",
+            warning: status.message.clone(),
+        });
+    }
+
+    let action =
+        if status.installed && (status.status.as_deref() == Some("disabled") || !status.enabled) {
+            enable_openclaw_plugin(policy.plugin_id)?;
+            "enabled"
+        } else if let Some(npm_spec) = policy.npm_spec {
+            install_openclaw_plugin(npm_spec)?;
+            "installed"
+        } else {
+            return Err(status
+                .message
+                .clone()
+                .unwrap_or_else(|| format!("Plugin {} is not ready", policy.plugin_id)));
+        };
+
+    status = get_openclaw_cli_managed_plugin_status(channel_type, policy.plugin_id)?;
+    if !is_channel_plugin_ready(&status) {
+        return Err(status.message.clone().unwrap_or_else(|| {
+            format!("Plugin {} is not ready after {}", policy.plugin_id, action)
+        }));
+    }
+
+    Ok(EnsureChannelPluginResult {
+        plugin_ensured: true,
+        plugin_action: action,
+        warning: status.message.clone(),
+    })
+}
+
+fn ensure_legacy_dingtalk_channel_plugin() -> Result<EnsureChannelPluginResult, String> {
+    let (installed, warning) = ensure_dingtalk_plugin_installed()?;
+    if !installed {
+        return Err(warning.unwrap_or_else(|| "DingTalk plugin install failed".into()));
+    }
+
+    Ok(EnsureChannelPluginResult {
+        plugin_ensured: true,
+        plugin_action: "legacy-installed",
+        warning,
+    })
+}
+
+fn ensure_channel_plugin_ready(channel_type: &str) -> Result<EnsureChannelPluginResult, String> {
+    let Some(policy) = channel_plugin_policy(channel_type) else {
+        return Ok(EnsureChannelPluginResult {
+            plugin_ensured: false,
+            plugin_action: "none",
+            warning: None,
+        });
+    };
+
+    match policy.install_mode {
+        ChannelPluginInstallMode::OpenClawCliManaged => {
+            ensure_openclaw_cli_managed_channel_plugin(channel_type, policy)
+        }
+        ChannelPluginInstallMode::LegacyClawyManaged => ensure_legacy_dingtalk_channel_plugin(),
+    }
+}
+
 fn ensure_dingtalk_plugin_installed() -> Result<(bool, Option<String>), String> {
     let target_dir = openclaw_config_dir().join("extensions").join("dingtalk");
     let target_manifest = target_dir.join("openclaw.plugin.json");
@@ -5376,19 +5671,16 @@ fn save_channel_config_value(
     let mut config = read_openclaw_json()?;
     let existing = read_channel_config_value(channel_type)?;
 
-    let mut plugin_installed = None;
-    let mut warning = None;
-    if channel_type == "dingtalk" {
-        let (installed, install_warning) = ensure_dingtalk_plugin_installed()?;
-        if !installed {
-            return Ok(json!({
-                "success": false,
-                "error": install_warning.unwrap_or_else(|| "DingTalk plugin install failed".into()),
-            }));
-        }
-        plugin_installed = Some(installed);
-        warning = install_warning;
+    let plugin_result = if channel_plugin_policy(channel_type).is_some() {
+        Some(ensure_channel_plugin_ready(channel_type)?)
+    } else {
+        None
+    };
+    let warning = plugin_result
+        .as_ref()
+        .and_then(|result| result.warning.clone());
 
+    if channel_type == "dingtalk" {
         let root = ensure_object(&mut config);
         let plugins = root
             .entry("plugins")
@@ -5441,8 +5733,12 @@ fn save_channel_config_value(
 
     let mut response = Map::new();
     response.insert("success".into(), Value::Bool(true));
-    if let Some(installed) = plugin_installed {
-        response.insert("pluginInstalled".into(), Value::Bool(installed));
+    if let Some(result) = &plugin_result {
+        response.insert("pluginEnsured".into(), Value::Bool(result.plugin_ensured));
+        response.insert(
+            "pluginAction".into(),
+            Value::String(result.plugin_action.to_string()),
+        );
     }
     if let Some(warning) = warning {
         response.insert("warning".into(), Value::String(warning));
@@ -6302,8 +6598,10 @@ fn install_managed_uv_binary_in_base(base_dir: &Path) -> Result<PathBuf, String>
         managed_uv_staging_dir_from_base(base_dir).join(format!("{}", Uuid::new_v4().simple()));
     ensure_dir(&staging_dir)?;
     let current_dir = managed_uv_current_dir_from_base(base_dir);
-    let temp_current_dir = managed_uv_dir_from_base(base_dir)
-        .join(format!("{MANAGED_UV_CURRENT_DIR_NAME}.{}", Uuid::new_v4().simple()));
+    let temp_current_dir = managed_uv_dir_from_base(base_dir).join(format!(
+        "{MANAGED_UV_CURRENT_DIR_NAME}.{}",
+        Uuid::new_v4().simple()
+    ));
 
     let install_result = (|| -> Result<PathBuf, String> {
         extract_archive_to_dir(&destination, &staging_dir)?;
@@ -6317,7 +6615,9 @@ fn install_managed_uv_binary_in_base(base_dir: &Path) -> Result<PathBuf, String>
         })?;
 
         ensure_dir(&temp_current_dir.join(uv_target_dir_name()))?;
-        let target_binary = temp_current_dir.join(uv_target_dir_name()).join(binary_name);
+        let target_binary = temp_current_dir
+            .join(uv_target_dir_name())
+            .join(binary_name);
         fs::rename(&staged_binary, &target_binary).map_err(|err| err.to_string())?;
         ensure_unix_executable(&target_binary)?;
 
@@ -8990,7 +9290,8 @@ fn invoke_ipc(
                 ManagedRuntimeKind::OpenClaw,
                 version_for_task,
                 move |app_handle, _state_handle| {
-                    let _ = install_recommended_managed_openclaw_release_with_progress(&app_handle)?;
+                    let _ =
+                        install_recommended_managed_openclaw_release_with_progress(&app_handle)?;
                     Ok(())
                 },
             );
@@ -9469,6 +9770,10 @@ fn invoke_ipc(
                 "values": get_channel_form_values_value(channel_type)?,
             }))
         }
+        "channel:getPluginStatus" => {
+            let channel_type = args.get(0).and_then(Value::as_str).unwrap_or_default();
+            get_channel_plugin_status_value(channel_type)
+        }
         "channel:deleteConfig" => {
             let channel_type = args.get(0).and_then(Value::as_str).unwrap_or_default();
             delete_channel_config_value(channel_type)?;
@@ -9919,6 +10224,79 @@ mod tests {
     }
 
     #[test]
+    fn parse_openclaw_plugin_status_reads_matrix_states() {
+        let plugins_json = json!({
+            "plugins": [
+                {
+                    "id": "matrix",
+                    "enabled": false,
+                    "status": "disabled",
+                    "origin": "bundled",
+                    "error": "bundled (disabled by default)"
+                }
+            ]
+        });
+
+        let status = parse_openclaw_plugin_status("matrix", "matrix", &plugins_json);
+
+        assert!(status.required);
+        assert!(status.installed);
+        assert!(!status.enabled);
+        assert_eq!(status.status.as_deref(), Some("disabled"));
+        assert_eq!(status.origin.as_deref(), Some("bundled"));
+        assert_eq!(
+            status.message.as_deref(),
+            Some("bundled (disabled by default)")
+        );
+    }
+
+    #[test]
+    fn parse_openclaw_plugin_status_marks_missing_plugin() {
+        let status = parse_openclaw_plugin_status("matrix", "matrix", &json!({ "plugins": [] }));
+
+        assert!(status.required);
+        assert!(!status.installed);
+        assert!(!status.enabled);
+        assert_eq!(status.status.as_deref(), Some("missing"));
+    }
+
+    #[test]
+    fn channel_plugin_ready_accepts_loaded_or_enabled_non_error_states() {
+        assert!(is_channel_plugin_ready(&ChannelPluginStatusPayload {
+            required: true,
+            channel_type: "matrix".into(),
+            plugin_id: Some("matrix".into()),
+            installed: true,
+            enabled: true,
+            status: Some("loaded".into()),
+            origin: Some("bundled".into()),
+            message: None,
+        }));
+
+        assert!(is_channel_plugin_ready(&ChannelPluginStatusPayload {
+            required: true,
+            channel_type: "matrix".into(),
+            plugin_id: Some("matrix".into()),
+            installed: true,
+            enabled: true,
+            status: Some("configured".into()),
+            origin: Some("npm".into()),
+            message: None,
+        }));
+
+        assert!(!is_channel_plugin_ready(&ChannelPluginStatusPayload {
+            required: true,
+            channel_type: "matrix".into(),
+            plugin_id: Some("matrix".into()),
+            installed: true,
+            enabled: true,
+            status: Some("error".into()),
+            origin: Some("npm".into()),
+            message: Some("broken".into()),
+        }));
+    }
+
+    #[test]
     fn managed_runtime_helpers_build_versioned_layout_without_touching_openclaw_data_dir() {
         let home_dir = PathBuf::from("/tmp/clawy-home");
         let clawy_dir = clawy_base_dir_from_home(&home_dir);
@@ -10058,14 +10436,13 @@ mod tests {
             sha256: archive_sha256,
         };
 
-        let downloaded =
-            download_managed_node_archive_with_client_in_base(
-                test_dir.path(),
-                &client,
-                &payload,
-                None,
-            )
-                .expect("download managed node archive");
+        let downloaded = download_managed_node_archive_with_client_in_base(
+            test_dir.path(),
+            &client,
+            &payload,
+            None,
+        )
+        .expect("download managed node archive");
 
         assert_eq!(
             downloaded,
@@ -10095,14 +10472,13 @@ mod tests {
             sha256: "0000000000000000000000000000000000000000000000000000000000000000".into(),
         };
 
-        let error =
-            download_managed_node_archive_with_client_in_base(
-                test_dir.path(),
-                &client,
-                &payload,
-                None,
-            )
-                .expect_err("checksum mismatch should fail");
+        let error = download_managed_node_archive_with_client_in_base(
+            test_dir.path(),
+            &client,
+            &payload,
+            None,
+        )
+        .expect_err("checksum mismatch should fail");
 
         assert!(error.contains("checksum mismatch"));
         assert!(!managed_runtime_downloads_dir_from_base(test_dir.path())
@@ -10172,8 +10548,9 @@ mod tests {
 
         install_managed_node_archive_in_base(test_dir.path(), "24.8.0", &working_archive)
             .expect("install working managed node");
-        let error = install_managed_node_archive_in_base(test_dir.path(), "24.8.1", &broken_archive)
-            .expect_err("broken managed node archive should fail");
+        let error =
+            install_managed_node_archive_in_base(test_dir.path(), "24.8.1", &broken_archive)
+                .expect_err("broken managed node archive should fail");
 
         assert!(error.contains("Managed Node archive did not produce"));
         assert_eq!(
