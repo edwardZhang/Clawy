@@ -508,6 +508,10 @@ class GatewayBridge {
       uptime?: number;
     }>('gateway:health');
 
+    if (!health.ok) {
+      return health;
+    }
+
     if (this.isConnected()) {
       return {
         ...health,
@@ -515,7 +519,21 @@ class GatewayBridge {
         error: undefined,
       };
     }
-    return health;
+
+    try {
+      await this.ensureConnected(false, 12_000);
+      return {
+        ...health,
+        ok: true,
+        error: undefined,
+      };
+    } catch (error) {
+      return {
+        ...health,
+        ok: false,
+        error: toErrorMessage(error, 'Gateway connection validation failed'),
+      };
+    }
   }
 
   async rpc<T>(method: string, params?: unknown, timeoutMs = 30_000): Promise<T> {

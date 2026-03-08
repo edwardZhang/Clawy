@@ -42,6 +42,7 @@ import { useSettingsStore } from '@/stores/settings';
 import { useTranslation } from 'react-i18next';
 import { SUPPORTED_LANGUAGES } from '@/i18n';
 import { toast } from 'sonner';
+import type { GatewayStatus } from '@/types/gateway';
 interface SetupStep {
   id: string;
   title: string;
@@ -401,6 +402,11 @@ interface RuntimeInstallEventPayload {
     bytesPerSecond?: number;
   };
 }
+
+interface GatewayDiagnosticView {
+  message: string;
+  detail?: string;
+}
 function formatRuntimeSource(source?: 'path' | 'managed' | 'bundled' | 'nodeModules') {
   switch (source) {
     case 'path':
@@ -444,6 +450,106 @@ function describeInstallProgress(payload: RuntimeInstallEventPayload): string | 
     return `${formatBytes(progress.transferred)} downloaded${speed}`;
   }
   return payload.detail;
+}
+
+function describeGatewayDiagnostic(
+  error: string | undefined,
+  status: GatewayStatus,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): GatewayDiagnosticView {
+  const normalized = (error || '').toLowerCase();
+  const detail = error?.trim();
+
+  if (!detail) {
+    return {
+      message: t('runtime.status.gatewayFailed'),
+    };
+  }
+
+  if (normalized.includes('token mismatch') || normalized.includes('failed authentication attempts')) {
+    return {
+      message: t('runtime.status.gatewayTokenMismatch'),
+      detail: t('runtime.status.gatewayTokenMismatchDetail', {
+        port: status.port,
+        error: detail,
+      }),
+    };
+  }
+
+  if (normalized.includes('pairing required')) {
+    return {
+      message: t('runtime.status.gatewayPairingRequired'),
+      detail: t('runtime.status.gatewayPairingRequiredDetail', {
+        port: status.port,
+        error: detail,
+      }),
+    };
+  }
+
+  if (
+    normalized.includes('already in use') ||
+    normalized.includes('address in use') ||
+    normalized.includes('port ') && normalized.includes('in use')
+  ) {
+    return {
+      message: t('runtime.status.gatewayPortInUse', { port: status.port }),
+      detail: t('runtime.status.gatewayPortInUseDetail', {
+        port: status.port,
+        error: detail,
+      }),
+    };
+  }
+
+  if (
+    normalized.includes('no compatible node.js runtime available') ||
+    normalized.includes('no compatible openclaw runtime available') ||
+    normalized.includes('failed to launch openclaw gateway')
+  ) {
+    return {
+      message: t('runtime.status.gatewayRuntimeMissing'),
+      detail: t('runtime.status.gatewayRuntimeMissingDetail', {
+        error: detail,
+      }),
+    };
+  }
+
+  if (
+    normalized.includes('invalid config') ||
+    normalized.includes('configuration') ||
+    normalized.includes('unable to resolve runtime') ||
+    normalized.includes('failed to launch')
+  ) {
+    return {
+      message: t('runtime.status.gatewayConfigFailed'),
+      detail: t('runtime.status.gatewayConfigFailedDetail', {
+        error: detail,
+      }),
+    };
+  }
+
+  if (normalized.includes('timed out') || normalized.includes('timeout')) {
+    return {
+      message: t('runtime.status.gatewayTimedOut'),
+      detail: t('runtime.status.gatewayTimedOutDetail', {
+        error: detail,
+      }),
+    };
+  }
+
+  if (normalized.includes('not reachable') || normalized.includes('socket is not connected')) {
+    return {
+      message: t('runtime.status.gatewayUnavailable'),
+      detail: t('runtime.status.gatewayUnavailableDetail', {
+        port: status.port,
+        error: detail,
+      }),
+    };
+  }
+
+  return {
+    message: t('runtime.status.gatewayFailed'),
+    detail,
+  };
 }
 
 function runtimeCheckBadgeVariant(status: RuntimeCheckStatus) {
@@ -565,7 +671,9 @@ function RuntimeCheckCard({
 function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const { t } = useTranslation('setup');
   const gatewayStatus = useGatewayStore((state) => state.status);
+  const gatewayLastError = useGatewayStore((state) => state.lastError);
   const startGateway = useGatewayStore((state) => state.start);
+  const restartGateway = useGatewayStore((state) => state.restart);
   const checkGatewayHealth = useGatewayStore((state) => state.checkHealth);
 
   const [checks, dispatchChecks] = useReducer(
@@ -630,6 +738,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         patch: {
           status: 'idle',
           message: t('runtime.status.gatewayStopped'),
+          detail: t('runtime.status.gatewayStoppedDetail'),
         },
       });
       return;
@@ -644,31 +753,39 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
           patch: {
             status: 'success',
             message: t('runtime.status.gatewayRunning', { port: currentGateway.port }),
+            detail: t('runtime.status.gatewayRunningDetail', {
+              port: currentGateway.port,
+              uptime: health.uptime ? Math.round(health.uptime / 1000) : 0,
+            }),
           },
         });
         return;
       }
 
+      const diagnostic = describeGatewayDiagnostic(health.error || currentGateway.error || undefined, currentGateway, t);
       dispatchChecks({
         type: 'set',
         key: 'gateway',
         patch: {
           status: 'error',
-          message: health.error || t('runtime.status.gatewayFailed'),
+          message: diagnostic.message,
+          detail: diagnostic.detail,
         },
       });
       return;
     } catch {
+      const diagnostic = describeGatewayDiagnostic(currentGateway.error || gatewayLastError || undefined, currentGateway, t);
       dispatchChecks({
         type: 'set',
         key: 'gateway',
         patch: {
           status: 'error',
-          message: currentGateway.error || t('runtime.status.gatewayFailed'),
+          message: diagnostic.message,
+          detail: diagnostic.detail,
         },
       });
     }
-  }, [checkGatewayHealth, t]);
+  }, [checkGatewayHealth, gatewayLastError, t]);
 
   const runChecks = useCallback(async () => {
     dispatchChecks({
@@ -703,10 +820,37 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
             path: runtimeStatus.openclaw.dir || undefined,
           },
           gateway: nextRuntimeReady
-            ? { status: 'checking', message: t('runtime.status.checkingGateway') }
+            ? { status: 'checking', message: t('runtime.status.checkingGateway'), detail: t('runtime.status.gatewayAutoStartDetail') }
             : { status: 'idle', message: t('runtime.status.waitingForDependencies') },
         },
       });
+
+      if (nextRuntimeReady) {
+        const latestGateway = useGatewayStore.getState().status;
+        if (latestGateway.state === 'stopped') {
+          dispatchChecks({
+            type: 'set',
+            key: 'gateway',
+            patch: {
+              status: 'checking',
+              message: t('runtime.status.gatewayStarting'),
+              detail: t('runtime.status.gatewayAutoStartDetail'),
+            },
+          });
+          await startGateway();
+        } else if (latestGateway.state === 'error') {
+          dispatchChecks({
+            type: 'set',
+            key: 'gateway',
+            patch: {
+              status: 'checking',
+              message: t('runtime.status.gatewayRechecking'),
+              detail: t('runtime.status.gatewayAutoRestartDetail'),
+            },
+          });
+          await restartGateway();
+        }
+      }
 
       await evaluateGatewayAvailability(nextRuntimeReady);
     } catch (error) {
@@ -729,7 +873,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         },
       });
     }
-  }, [evaluateGatewayAvailability, t]);
+  }, [evaluateGatewayAvailability, restartGateway, startGateway, t]);
 
   useEffect(() => {
     void runChecks();
@@ -853,6 +997,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         patch: {
           status: 'error',
           message: t('runtime.status.gatewayTimedOut'),
+          detail: t('runtime.status.gatewayTimedOutDetail'),
         },
       });
     }, 600 * 1000);
@@ -932,20 +1077,33 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       key: 'gateway',
       patch: {
         status: 'checking',
-        message: t('runtime.status.gatewayStarting'),
+        message: gatewayStatus.state === 'error' ? t('runtime.status.gatewayRechecking') : t('runtime.status.gatewayStarting'),
+        detail: gatewayStatus.state === 'error'
+          ? t('runtime.status.gatewayAutoRestartDetail')
+          : t('runtime.status.gatewayAutoStartDetail'),
       },
     });
 
     try {
-      await startGateway();
+      if (gatewayStatus.state === 'error') {
+        await restartGateway();
+      } else {
+        await startGateway();
+      }
       await evaluateGatewayAvailability(true);
     } catch (error) {
+      const diagnostic = describeGatewayDiagnostic(
+        error instanceof Error ? error.message : String(error),
+        useGatewayStore.getState().status,
+        t,
+      );
       dispatchChecks({
         type: 'set',
         key: 'gateway',
         patch: {
           status: 'error',
-          message: error instanceof Error ? error.message : t('runtime.status.gatewayFailed'),
+          message: diagnostic.message,
+          detail: diagnostic.detail,
         },
       });
     }
@@ -989,7 +1147,9 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     ? handleInstallOpenClaw
     : undefined;
   const gatewayActionLabel = runtimeReady && (checks.checks.gateway.status === 'error' || checks.checks.gateway.status === 'idle')
-    ? t('runtime.startGateway')
+    ? gatewayStatus.state === 'error'
+      ? t('runtime.restartGateway')
+      : t('runtime.startGateway')
     : undefined;
   const gatewayAction = runtimeReady && (checks.checks.gateway.status === 'error' || checks.checks.gateway.status === 'idle')
     ? handleStartGateway
