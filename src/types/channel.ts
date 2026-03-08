@@ -51,12 +51,13 @@ export interface Channel {
 export interface ChannelConfigField {
   key: string;
   label: string;
-  type: 'text' | 'password' | 'select';
+  type: 'text' | 'password' | 'select' | 'textarea';
   placeholder?: string;
   required?: boolean;
   envVar?: string;
   description?: string;
   options?: { value: string; label: string }[];
+  defaultValue?: string;
 }
 
 /**
@@ -364,6 +365,107 @@ export const CHANNEL_META: Record<ChannelType, ChannelMeta> = {
         placeholder: 'channels:meta.matrix.fields.accessToken.placeholder',
         required: true,
       },
+      {
+        key: 'encryption',
+        label: 'channels:meta.matrix.fields.encryption.label',
+        type: 'select',
+        description: 'channels:meta.matrix.fields.encryption.description',
+        defaultValue: 'false',
+        options: [
+          {
+            value: 'false',
+            label: 'channels:meta.matrix.options.boolean.disabled',
+          },
+          {
+            value: 'true',
+            label: 'channels:meta.matrix.options.boolean.enabled',
+          },
+        ],
+      },
+      {
+        key: 'dmPolicy',
+        label: 'channels:meta.matrix.fields.dmPolicy.label',
+        type: 'select',
+        description: 'channels:meta.matrix.fields.dmPolicy.description',
+        defaultValue: 'pairing',
+        options: [
+          {
+            value: 'pairing',
+            label: 'channels:meta.matrix.options.dmPolicy.pairing',
+          },
+          {
+            value: 'allowlist',
+            label: 'channels:meta.matrix.options.dmPolicy.allowlist',
+          },
+          {
+            value: 'open',
+            label: 'channels:meta.matrix.options.dmPolicy.open',
+          },
+          {
+            value: 'disabled',
+            label: 'channels:meta.matrix.options.dmPolicy.disabled',
+          },
+        ],
+      },
+      {
+        key: 'dmAllowFrom',
+        label: 'channels:meta.matrix.fields.dmAllowFrom.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.matrix.fields.dmAllowFrom.placeholder',
+        description: 'channels:meta.matrix.fields.dmAllowFrom.description',
+      },
+      {
+        key: 'groupPolicy',
+        label: 'channels:meta.matrix.fields.groupPolicy.label',
+        type: 'select',
+        description: 'channels:meta.matrix.fields.groupPolicy.description',
+        defaultValue: 'allowlist',
+        options: [
+          {
+            value: 'allowlist',
+            label: 'channels:meta.matrix.options.groupPolicy.allowlist',
+          },
+          {
+            value: 'open',
+            label: 'channels:meta.matrix.options.groupPolicy.open',
+          },
+          {
+            value: 'disabled',
+            label: 'channels:meta.matrix.options.groupPolicy.disabled',
+          },
+        ],
+      },
+      {
+        key: 'groups',
+        label: 'channels:meta.matrix.fields.groups.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.matrix.fields.groups.placeholder',
+        description: 'channels:meta.matrix.fields.groups.description',
+      },
+      {
+        key: 'groupAllowFrom',
+        label: 'channels:meta.matrix.fields.groupAllowFrom.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.matrix.fields.groupAllowFrom.placeholder',
+        description: 'channels:meta.matrix.fields.groupAllowFrom.description',
+      },
+      {
+        key: 'roomReplyMode',
+        label: 'channels:meta.matrix.fields.roomReplyMode.label',
+        type: 'select',
+        description: 'channels:meta.matrix.fields.roomReplyMode.description',
+        defaultValue: 'mentionOnly',
+        options: [
+          {
+            value: 'mentionOnly',
+            label: 'channels:meta.matrix.options.roomReplyMode.mentionOnly',
+          },
+          {
+            value: 'autoReply',
+            label: 'channels:meta.matrix.options.roomReplyMode.autoReply',
+          },
+        ],
+      },
     ],
     instructions: [
       'channels:meta.matrix.instructions.0',
@@ -497,6 +599,15 @@ export const CHANNEL_META: Record<ChannelType, ChannelMeta> = {
  */
 export function getPrimaryChannels(): ChannelType[] {
   return ['telegram', 'discord', 'whatsapp', 'dingtalk', 'feishu', 'matrix'];
+}
+
+export function getDefaultChannelConfigValues(type: ChannelType): Record<string, string> {
+  return CHANNEL_META[type].configFields.reduce<Record<string, string>>((defaults, field) => {
+    if (typeof field.defaultValue === 'string') {
+      defaults[field.key] = field.defaultValue;
+    }
+    return defaults;
+  }, {});
 }
 
 /**

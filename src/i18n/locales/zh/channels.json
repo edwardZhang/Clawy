@@ -218,12 +218,64 @@
                 "accessToken": {
                     "label": "访问令牌 (Access Token)",
                     "placeholder": "您的访问令牌"
+                },
+                "encryption": {
+                    "label": "端到端加密",
+                    "description": "启用加密房间支持。Beeper 和加密 Matrix 房间通常需要开启。"
+                },
+                "dmPolicy": {
+                    "label": "私聊策略",
+                    "description": "决定谁可以主动私聊机器人。默认是配对审批。"
+                },
+                "dmAllowFrom": {
+                    "label": "私聊白名单",
+                    "placeholder": "@admin:example.org",
+                    "description": "每行一个完整 Matrix 用户 ID。若配合“公开私聊”使用，可填 * 允许所有人。"
+                },
+                "groupPolicy": {
+                    "label": "房间策略",
+                    "description": "决定机器人是在白名单房间回复、在任意房间回复，还是完全不处理房间消息。"
+                },
+                "groups": {
+                    "label": "允许的房间",
+                    "placeholder": "!roomId:example.org\n#alias:example.org",
+                    "description": "每行一个房间 ID 或房间别名。房间策略为白名单时使用。"
+                },
+                "groupAllowFrom": {
+                    "label": "允许触发的房间成员",
+                    "placeholder": "@owner:example.org",
+                    "description": "可选。每行一个完整 Matrix 用户 ID，仅这些成员可在房间中触发机器人。"
+                },
+                "roomReplyMode": {
+                    "label": "房间回复模式",
+                    "description": "“仅在被提及时回复”更安全；“自动回复”会响应房间内的每条允许消息。"
+                }
+            },
+            "options": {
+                "boolean": {
+                    "disabled": "关闭",
+                    "enabled": "开启"
+                },
+                "dmPolicy": {
+                    "pairing": "需要配对审批",
+                    "allowlist": "仅白名单用户",
+                    "open": "任何人都可私聊",
+                    "disabled": "禁用所有私聊"
+                },
+                "groupPolicy": {
+                    "allowlist": "仅白名单房间",
+                    "open": "任意房间",
+                    "disabled": "禁用所有房间"
+                },
+                "roomReplyMode": {
+                    "mentionOnly": "仅在被提及时回复",
+                    "autoReply": "房间内自动回复"
                 }
             },
             "instructions": [
                 "创建一个 Matrix 账户或使用现有账户",
                 "从您的客户端获取访问令牌",
-                "在下方输入 Homeserver 地址和令牌"
+                "配置私聊和房间策略，确保机器人会在预期场景下回复"
             ]
         },
         "line": {

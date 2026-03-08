@@ -5189,6 +5189,7 @@ enum ChannelPluginInstallMode {
 struct ChannelPluginPolicy {
     plugin_id: &'static str,
     install_mode: ChannelPluginInstallMode,
+    bundled_install_spec: Option<&'static str>,
     npm_spec: Option<&'static str>,
 }
 
@@ -5249,11 +5250,13 @@ fn channel_plugin_policy(channel_type: &str) -> Option<ChannelPluginPolicy> {
         "matrix" => Some(ChannelPluginPolicy {
             plugin_id: "matrix",
             install_mode: ChannelPluginInstallMode::OpenClawCliManaged,
+            bundled_install_spec: Some("matrix"),
             npm_spec: Some("@openclaw/matrix"),
         }),
         "dingtalk" => Some(ChannelPluginPolicy {
             plugin_id: "dingtalk",
             install_mode: ChannelPluginInstallMode::LegacyClawyManaged,
+            bundled_install_spec: None,
             npm_spec: None,
         }),
         _ => None,
@@ -5329,11 +5332,12 @@ fn get_openclaw_cli_managed_plugin_status(
     plugin_id: &str,
 ) -> Result<ChannelPluginStatusPayload, String> {
     let plugins_json = run_openclaw_cli_json(&["plugins", "list"])?;
-    Ok(parse_openclaw_plugin_status(
-        channel_type,
-        plugin_id,
-        &plugins_json,
-    ))
+    let status = parse_openclaw_plugin_status(channel_type, plugin_id, &plugins_json);
+    if let Some(policy) = channel_plugin_policy(channel_type) {
+        return apply_matrix_runtime_dependency_status(&status, policy);
+    }
+
+    Ok(status)
 }
 
 fn get_legacy_dingtalk_plugin_status() -> ChannelPluginStatusPayload {
@@ -5399,6 +5403,140 @@ fn install_openclaw_plugin(spec: &str) -> Result<(), String> {
     run_openclaw_cli_command(&["plugins", "install", spec], &label).map(|_| ())
 }
 
+fn openclaw_runtime_extension_root(plugin_id: &str) -> Result<PathBuf, String> {
+    let runtime = resolve_openclaw_runtime();
+    let failure_message = runtime.failure_message();
+    let runtime_dir = runtime.dir.ok_or_else(|| {
+        format!(
+            "No compatible OpenClaw runtime available: {}",
+            failure_message
+        )
+    })?;
+    Ok(runtime_dir.join("extensions").join(plugin_id))
+}
+
+fn matrix_sdk_dependency_paths(plugin_root: &Path) -> [PathBuf; 2] {
+    [
+        plugin_root
+            .join("node_modules")
+            .join("@vector-im")
+            .join("matrix-bot-sdk"),
+        plugin_root
+            .join("node_modules")
+            .join("@matrix-org")
+            .join("matrix-sdk-crypto-nodejs"),
+    ]
+}
+
+fn matrix_runtime_dependencies_installed(plugin_root: &Path) -> bool {
+    matrix_sdk_dependency_paths(plugin_root)
+        .iter()
+        .all(|path| path.exists())
+}
+
+fn resolve_npm_binary() -> Result<PathBuf, String> {
+    let node_resolution = resolve_node_binary();
+    let Some(node_binary) = node_resolution.path else {
+        return Err(format!(
+            "No compatible Node.js runtime available: {}",
+            node_resolution.failure_message()
+        ));
+    };
+
+    let npm_binary_name = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    if let Some(bin_dir) = node_binary.parent() {
+        let bundled_npm = bin_dir.join(npm_binary_name);
+        if bundled_npm.exists() {
+            return Ok(bundled_npm);
+        }
+    }
+
+    Ok(PathBuf::from(npm_binary_name))
+}
+
+fn install_matrix_bundled_plugin_dependencies() -> Result<(), String> {
+    let plugin_root = openclaw_runtime_extension_root("matrix")?;
+    if matrix_runtime_dependencies_installed(&plugin_root) {
+        return Ok(());
+    }
+
+    let npm_binary = resolve_npm_binary()?;
+    let mut command = Command::new(npm_binary);
+    apply_proxy_env(&mut command, &load_settings());
+    command
+        .args(["install", "--omit=dev", "--silent"])
+        .current_dir(&plugin_root)
+        .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_command_capture(&mut command, "matrix bundled dependency install")?;
+
+    if matrix_runtime_dependencies_installed(&plugin_root) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Matrix dependency install completed but runtime packages are still missing under {}",
+        plugin_root.to_string_lossy()
+    ))
+}
+
+fn apply_matrix_runtime_dependency_status(
+    status: &ChannelPluginStatusPayload,
+    policy: ChannelPluginPolicy,
+) -> Result<ChannelPluginStatusPayload, String> {
+    if policy.plugin_id != "matrix" || status.origin.as_deref() != Some("bundled") {
+        return Ok(status.clone());
+    }
+
+    let plugin_root = openclaw_runtime_extension_root(policy.plugin_id)?;
+    if matrix_runtime_dependencies_installed(&plugin_root) {
+        return Ok(status.clone());
+    }
+
+    Ok(ChannelPluginStatusPayload {
+        required: status.required,
+        channel_type: status.channel_type.clone(),
+        plugin_id: status.plugin_id.clone(),
+        installed: false,
+        enabled: false,
+        status: Some("missing".into()),
+        origin: status.origin.clone(),
+        message: Some("Matrix runtime dependencies are missing and will be installed.".into()),
+    })
+}
+
+fn resolve_openclaw_cli_managed_install_spec(policy: ChannelPluginPolicy) -> Option<&'static str> {
+    if let Some(bundled_install_spec) = policy.bundled_install_spec {
+        if openclaw_runtime_extension_root(policy.plugin_id)
+            .map(|path| path.is_dir())
+            .unwrap_or(false)
+        {
+            return Some(bundled_install_spec);
+        }
+    }
+
+    policy.npm_spec
+}
+
+fn should_install_openclaw_cli_managed_plugin(
+    status: &ChannelPluginStatusPayload,
+    policy: ChannelPluginPolicy,
+) -> bool {
+    if resolve_openclaw_cli_managed_install_spec(policy).is_none() {
+        return false;
+    }
+
+    if !status.installed {
+        return true;
+    }
+
+    policy.bundled_install_spec.is_some()
+        && status.origin.as_deref() == Some("bundled")
+        && !is_channel_plugin_ready(status)
+}
+
 fn ensure_openclaw_cli_managed_channel_plugin(
     channel_type: &str,
     policy: ChannelPluginPolicy,
@@ -5412,19 +5550,24 @@ fn ensure_openclaw_cli_managed_channel_plugin(
         });
     }
 
-    let action =
-        if status.installed && (status.status.as_deref() == Some("disabled") || !status.enabled) {
-            enable_openclaw_plugin(policy.plugin_id)?;
-            "enabled"
-        } else if let Some(npm_spec) = policy.npm_spec {
-            install_openclaw_plugin(npm_spec)?;
-            "installed"
-        } else {
-            return Err(status
-                .message
-                .clone()
-                .unwrap_or_else(|| format!("Plugin {} is not ready", policy.plugin_id)));
-        };
+    let action = if should_install_openclaw_cli_managed_plugin(&status, policy) {
+        let install_spec = resolve_openclaw_cli_managed_install_spec(policy)
+            .ok_or_else(|| format!("Plugin {} cannot be installed", policy.plugin_id))?;
+        install_openclaw_plugin(install_spec)?;
+        if policy.plugin_id == "matrix" {
+            install_matrix_bundled_plugin_dependencies()?;
+        }
+        "installed"
+    } else if status.installed && (status.status.as_deref() == Some("disabled") || !status.enabled)
+    {
+        enable_openclaw_plugin(policy.plugin_id)?;
+        "enabled"
+    } else {
+        return Err(status
+            .message
+            .clone()
+            .unwrap_or_else(|| format!("Plugin {} is not ready", policy.plugin_id)));
+    };
 
     status = get_openclaw_cli_managed_plugin_status(channel_type, policy.plugin_id)?;
     if !is_channel_plugin_ready(&status) {
@@ -5531,6 +5674,233 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn parse_delimited_entries(raw: &str) -> Vec<String> {
+    raw.split(|ch| ch == '\n' || ch == '\r' || ch == ',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn parse_string_list_form_value(raw: Option<&Value>) -> Vec<Value> {
+    raw.and_then(Value::as_str)
+        .map(parse_delimited_entries)
+        .unwrap_or_default()
+        .into_iter()
+        .map(Value::String)
+        .collect()
+}
+
+fn parse_bool_form_value(raw: Option<&Value>, default: bool) -> bool {
+    raw.and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| match value {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn matrix_room_reply_mode_value(raw: Option<&Value>) -> String {
+    raw.and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("mentionOnly")
+        .to_string()
+}
+
+fn apply_matrix_room_reply_mode(room: &mut Map<String, Value>, room_reply_mode: &str) {
+    match room_reply_mode {
+        "autoReply" => {
+            room.insert("autoReply".into(), Value::Bool(true));
+            room.remove("requireMention");
+        }
+        _ => {
+            room.insert("requireMention".into(), Value::Bool(true));
+            room.remove("autoReply");
+        }
+    }
+}
+
+fn matrix_groups_from_form(
+    raw: &Map<String, Value>,
+    existing_obj: Option<&Map<String, Value>>,
+    group_policy: &str,
+    room_reply_mode: &str,
+) -> Value {
+    let existing_groups = existing_obj
+        .and_then(|saved| saved.get("groups"))
+        .or_else(|| existing_obj.and_then(|saved| saved.get("rooms")))
+        .and_then(Value::as_object);
+    let mut groups = Map::new();
+
+    for group_id in parse_delimited_entries(
+        raw.get("groups")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    ) {
+        let mut group_entry = existing_groups
+            .and_then(|saved_groups| saved_groups.get(&group_id))
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        group_entry.insert("allow".into(), Value::Bool(true));
+        apply_matrix_room_reply_mode(&mut group_entry, room_reply_mode);
+        groups.insert(group_id, Value::Object(group_entry));
+    }
+
+    if group_policy == "open" {
+        let mut wildcard_entry = existing_groups
+            .and_then(|saved_groups| saved_groups.get("*"))
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        wildcard_entry.insert("allow".into(), Value::Bool(true));
+        apply_matrix_room_reply_mode(&mut wildcard_entry, room_reply_mode);
+        groups.insert("*".into(), Value::Object(wildcard_entry));
+    }
+
+    Value::Object(groups)
+}
+
+fn matrix_form_values_from_saved(saved_obj: &Map<String, Value>) -> Map<String, Value> {
+    let mut values = Map::new();
+
+    if let Some(homeserver) = saved_obj.get("homeserver").and_then(Value::as_str) {
+        values.insert("homeserver".into(), Value::String(homeserver.to_string()));
+    }
+    if let Some(access_token) = saved_obj.get("accessToken").and_then(Value::as_str) {
+        values.insert(
+            "accessToken".into(),
+            Value::String(access_token.to_string()),
+        );
+    }
+    values.insert(
+        "encryption".into(),
+        Value::String(
+            saved_obj
+                .get("encryption")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                .to_string(),
+        ),
+    );
+
+    let dm_obj = saved_obj.get("dm").and_then(Value::as_object);
+    values.insert(
+        "dmPolicy".into(),
+        Value::String(
+            dm_obj
+                .and_then(|dm| dm.get("policy"))
+                .and_then(Value::as_str)
+                .unwrap_or("pairing")
+                .to_string(),
+        ),
+    );
+    let dm_allow_from = dm_obj
+        .and_then(|dm| dm.get("allowFrom"))
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<&str>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    values.insert("dmAllowFrom".into(), Value::String(dm_allow_from));
+
+    values.insert(
+        "groupPolicy".into(),
+        Value::String(
+            saved_obj
+                .get("groupPolicy")
+                .and_then(Value::as_str)
+                .unwrap_or("allowlist")
+                .to_string(),
+        ),
+    );
+    let group_allow_from = saved_obj
+        .get("groupAllowFrom")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<&str>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    values.insert("groupAllowFrom".into(), Value::String(group_allow_from));
+
+    let groups_obj = saved_obj
+        .get("groups")
+        .or_else(|| saved_obj.get("rooms"))
+        .and_then(Value::as_object);
+    let room_reply_mode = groups_obj
+        .and_then(|groups| {
+            groups.get("*").and_then(Value::as_object).or_else(|| {
+                groups
+                    .iter()
+                    .find_map(|(key, value)| (key != "*").then_some(value))
+                    .and_then(Value::as_object)
+            })
+        })
+        .map(|room| {
+            if room
+                .get("autoReply")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || room
+                    .get("requireMention")
+                    .and_then(Value::as_bool)
+                    .map(|value| !value)
+                    .unwrap_or(false)
+            {
+                "autoReply"
+            } else {
+                "mentionOnly"
+            }
+        })
+        .unwrap_or("mentionOnly");
+    values.insert(
+        "roomReplyMode".into(),
+        Value::String(room_reply_mode.to_string()),
+    );
+    let groups = groups_obj
+        .map(|groups| {
+            groups
+                .iter()
+                .filter_map(|(key, value)| {
+                    if key == "*" {
+                        return None;
+                    }
+                    let room_obj = value.as_object()?;
+                    let enabled = room_obj
+                        .get("enabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
+                    let allowed = room_obj
+                        .get("allow")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
+                    if enabled && allowed {
+                        Some(key.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<&str>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    values.insert("groups".into(), Value::String(groups));
+
+    values
 }
 
 fn transform_channel_config(
@@ -5655,6 +6025,77 @@ fn transform_channel_config(
                 allow_from.push(Value::String("*".into()));
             }
             transformed.insert("allowFrom".into(), Value::Array(allow_from));
+        }
+        "matrix" => {
+            let existing_obj = existing.and_then(Value::as_object);
+
+            if let Some(homeserver) = raw
+                .get("homeserver")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                transformed.insert("homeserver".into(), Value::String(homeserver.to_string()));
+            }
+            if let Some(access_token) = raw
+                .get("accessToken")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                transformed.insert(
+                    "accessToken".into(),
+                    Value::String(access_token.to_string()),
+                );
+            }
+
+            transformed.insert(
+                "encryption".into(),
+                Value::Bool(parse_bool_form_value(raw.get("encryption"), false)),
+            );
+
+            let dm_policy = raw
+                .get("dmPolicy")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("pairing")
+                .to_string();
+            let mut dm_allow_from = parse_string_list_form_value(raw.get("dmAllowFrom"));
+            if dm_policy == "open"
+                && !dm_allow_from
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|entry| entry == "*")
+            {
+                dm_allow_from.push(Value::String("*".into()));
+            }
+            transformed.insert(
+                "dm".into(),
+                json!({
+                    "policy": dm_policy,
+                    "allowFrom": dm_allow_from,
+                }),
+            );
+
+            let group_policy = raw
+                .get("groupPolicy")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("allowlist")
+                .to_string();
+            transformed.insert("groupPolicy".into(), Value::String(group_policy.clone()));
+            transformed.insert(
+                "groupAllowFrom".into(),
+                Value::Array(parse_string_list_form_value(raw.get("groupAllowFrom"))),
+            );
+
+            let room_reply_mode = matrix_room_reply_mode_value(raw.get("roomReplyMode"));
+            transformed.insert(
+                "groups".into(),
+                matrix_groups_from_form(raw, existing_obj, &group_policy, &room_reply_mode),
+            );
         }
         _ => {
             transformed.extend(raw.clone());
@@ -5791,6 +6232,8 @@ fn get_channel_form_values_value(channel_type: &str) -> Result<Value, String> {
                 values.insert(key.clone(), Value::String(text.to_string()));
             }
         }
+    } else if channel_type == "matrix" {
+        values.extend(matrix_form_values_from_saved(saved_obj));
     } else {
         for (key, value) in saved_obj {
             if key == "enabled" {
@@ -10294,6 +10737,189 @@ mod tests {
             origin: Some("npm".into()),
             message: Some("broken".into()),
         }));
+    }
+
+    #[test]
+    fn matrix_policy_prefers_bare_bundled_install_spec() {
+        let policy = channel_plugin_policy("matrix").expect("matrix policy");
+
+        assert_eq!(policy.bundled_install_spec, Some("matrix"));
+        assert_eq!(policy.npm_spec, Some("@openclaw/matrix"));
+    }
+
+    #[test]
+    fn matrix_runtime_dependencies_installed_requires_sdk_and_crypto_packages() {
+        let plugin_root =
+            std::env::temp_dir().join(format!("clawy-matrix-runtime-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&plugin_root);
+        fs::create_dir_all(
+            plugin_root
+                .join("node_modules")
+                .join("@vector-im")
+                .join("matrix-bot-sdk"),
+        )
+        .expect("create sdk path");
+        assert!(!matrix_runtime_dependencies_installed(&plugin_root));
+
+        fs::create_dir_all(
+            plugin_root
+                .join("node_modules")
+                .join("@matrix-org")
+                .join("matrix-sdk-crypto-nodejs"),
+        )
+        .expect("create crypto path");
+        assert!(matrix_runtime_dependencies_installed(&plugin_root));
+        let _ = fs::remove_dir_all(&plugin_root);
+    }
+
+    #[test]
+    fn transform_channel_config_matrix_builds_nested_openclaw_fields() {
+        let mut raw = Map::new();
+        raw.insert(
+            "homeserver".into(),
+            Value::String("https://matrix.example.org".into()),
+        );
+        raw.insert("accessToken".into(), Value::String("syt_token".into()));
+        raw.insert("encryption".into(), Value::String("true".into()));
+        raw.insert("dmPolicy".into(), Value::String("open".into()));
+        raw.insert(
+            "dmAllowFrom".into(),
+            Value::String("@admin:example.org".into()),
+        );
+        raw.insert("groupPolicy".into(), Value::String("allowlist".into()));
+        raw.insert(
+            "groups".into(),
+            Value::String("!room:example.org\n#ops:example.org".into()),
+        );
+        raw.insert(
+            "groupAllowFrom".into(),
+            Value::String("@owner:example.org".into()),
+        );
+        raw.insert("roomReplyMode".into(), Value::String("autoReply".into()));
+
+        let transformed = transform_channel_config("matrix", &raw, None);
+
+        assert_eq!(
+            transformed.get("homeserver").and_then(Value::as_str),
+            Some("https://matrix.example.org")
+        );
+        assert_eq!(
+            transformed.get("accessToken").and_then(Value::as_str),
+            Some("syt_token")
+        );
+        assert_eq!(
+            transformed.get("encryption").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            transformed
+                .get("dm")
+                .and_then(Value::as_object)
+                .and_then(|dm| dm.get("policy"))
+                .and_then(Value::as_str),
+            Some("open")
+        );
+        assert_eq!(
+            transformed
+                .get("dm")
+                .and_then(Value::as_object)
+                .and_then(|dm| dm.get("allowFrom"))
+                .and_then(Value::as_array)
+                .map(|entries| entries.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
+            Some(vec!["@admin:example.org", "*"])
+        );
+        assert_eq!(
+            transformed.get("groupPolicy").and_then(Value::as_str),
+            Some("allowlist")
+        );
+        assert_eq!(
+            transformed
+                .get("groupAllowFrom")
+                .and_then(Value::as_array)
+                .map(|entries| entries.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
+            Some(vec!["@owner:example.org"])
+        );
+        let groups = transformed
+            .get("groups")
+            .and_then(Value::as_object)
+            .expect("groups object");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups
+                .get("!room:example.org")
+                .and_then(Value::as_object)
+                .and_then(|group| group.get("autoReply"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            groups
+                .get("#ops:example.org")
+                .and_then(Value::as_object)
+                .and_then(|group| group.get("allow"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn matrix_form_values_from_saved_flattens_nested_openclaw_fields() {
+        let saved = json!({
+            "homeserver": "https://matrix.example.org",
+            "accessToken": "syt_token",
+            "encryption": true,
+            "dm": {
+                "policy": "allowlist",
+                "allowFrom": ["@admin:example.org"]
+            },
+            "groupPolicy": "open",
+            "groupAllowFrom": ["@owner:example.org"],
+            "groups": {
+                "*": { "autoReply": true },
+                "!room:example.org": { "allow": true },
+                "#ops:example.org": { "enabled": false }
+            }
+        });
+
+        let values =
+            matrix_form_values_from_saved(saved.as_object().expect("matrix config object"));
+
+        assert_eq!(
+            values.get("homeserver").and_then(Value::as_str),
+            Some("https://matrix.example.org")
+        );
+        assert_eq!(
+            values.get("accessToken").and_then(Value::as_str),
+            Some("syt_token")
+        );
+        assert_eq!(
+            values.get("encryption").and_then(Value::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            values.get("dmPolicy").and_then(Value::as_str),
+            Some("allowlist")
+        );
+        assert_eq!(
+            values.get("dmAllowFrom").and_then(Value::as_str),
+            Some("@admin:example.org")
+        );
+        assert_eq!(
+            values.get("groupPolicy").and_then(Value::as_str),
+            Some("open")
+        );
+        assert_eq!(
+            values.get("groupAllowFrom").and_then(Value::as_str),
+            Some("@owner:example.org")
+        );
+        assert_eq!(
+            values.get("roomReplyMode").and_then(Value::as_str),
+            Some("autoReply")
+        );
+        assert_eq!(
+            values.get("groups").and_then(Value::as_str),
+            Some("!room:example.org")
+        );
     }
 
     #[test]
