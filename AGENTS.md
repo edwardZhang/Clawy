@@ -31,3 +31,24 @@ Standard dev commands are in `package.json` scripts and `README.md`. Key ones:
 - **No database**: The app uses JSON files under the app data directory plus OS-native secure storage. No database setup is needed.
 - **AI Provider keys**: Actual AI chat requires at least one provider API key configured via Settings > AI Providers. The app is fully navigable and testable without keys.
 - **Token usage history implementation**: Dashboard token usage history is not parsed from console logs. It reads OpenClaw session transcript `.jsonl` files under the local OpenClaw config directory, extracts assistant messages with `message.usage`, and aggregates fields such as input/output/cache/total tokens and cost from those structured records.
+
+## Default development workflow
+
+- For any task that changes code, tests, build logic, packaging, docs, or configuration, you must follow the Trello + GitHub workflow skill at `/Users/mi/.codex/skills/trello-github-codex-workflow/SKILL.md`.
+- The default flow in this repository is:
+  1. Create a Trello card for the task.
+  2. Move the card to `Inprogress`.
+  3. Create a `codex/` feature branch.
+  4. Implement the change in the current Codex session.
+  5. Run the smallest relevant validation.
+  6. Commit, push, and create a GitHub PR targeting `develop`.
+  7. Merge the PR into `develop`.
+  8. Move the Trello card to `Done`.
+- Do not skip this workflow unless the user explicitly says not to create cards, not to create PRs, or not to follow the workflow.
+- Never merge workflow-driven changes directly to `main`.
+
+## Skills
+
+### Available skills
+
+- `trello-github-codex-workflow`: Default development workflow for this repository. Use it for any engineering task that should be tracked in Trello and merged through GitHub into `develop`. File: `/Users/mi/.codex/skills/trello-github-codex-workflow/SKILL.md`
