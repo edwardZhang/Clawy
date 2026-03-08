@@ -6722,7 +6722,7 @@ fn update_check_internal(
     })?;
 
     let manifest_url = format!(
-        "https://oss.intelli-spectrum.com/{}/release-info.json",
+        "https://oss.wymsn.com/{}/release-info.json",
         update_channel_directory(&channel)
     );
     let client = reqwest_client()?;
