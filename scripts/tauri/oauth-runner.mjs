@@ -1,4 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const MINIMAX_SCOPE = 'group_id profile model.completion';
 const MINIMAX_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:user_code';
@@ -11,6 +14,9 @@ const QWEN_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 
 const provider = process.argv[2];
 const minimaxRegion = process.argv[3] || (provider === 'minimax-portal-cn' ? 'cn' : 'global');
+let pendingPromptResolve = null;
+let pendingPromptReject = null;
+let promptBuffer = '';
 
 function emit(type, payload = {}) {
   process.stdout.write(`${JSON.stringify({ type, ...payload })}\n`);
@@ -19,6 +25,65 @@ function emit(type, payload = {}) {
 function fail(message) {
   emit('error', { message });
   process.exitCode = 1;
+}
+
+function attachPromptInputBridge() {
+  if (provider !== 'openai-codex') {
+    return;
+  }
+
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    promptBuffer += chunk;
+    let newlineIndex = promptBuffer.indexOf('\n');
+    while (newlineIndex !== -1) {
+      const line = promptBuffer.slice(0, newlineIndex).replace(/\r$/, '');
+      promptBuffer = promptBuffer.slice(newlineIndex + 1);
+      if (pendingPromptResolve) {
+        const resolve = pendingPromptResolve;
+        pendingPromptResolve = null;
+        pendingPromptReject = null;
+        resolve(line);
+      }
+      newlineIndex = promptBuffer.indexOf('\n');
+    }
+  });
+  process.stdin.on('end', () => {
+    if (pendingPromptReject) {
+      const reject = pendingPromptReject;
+      pendingPromptResolve = null;
+      pendingPromptReject = null;
+      reject(new Error('OAuth input stream closed before receiving a response.'));
+    }
+  });
+}
+
+function waitForPromptInput() {
+  return new Promise((resolve, reject) => {
+    pendingPromptResolve = resolve;
+    pendingPromptReject = reject;
+  });
+}
+
+async function loadCodexOAuthModule() {
+  const runtimeDir = process.env.OPENCLAW_RUNTIME_DIR;
+  const candidatePaths = [
+    runtimeDir
+      ? path.join(runtimeDir, 'node_modules/@mariozechner/pi-ai/dist/utils/oauth/index.js')
+      : null,
+    path.join(process.cwd(), 'node_modules/openclaw/node_modules/@mariozechner/pi-ai/dist/utils/oauth/index.js'),
+    path.join(process.cwd(), 'node_modules/@mariozechner/pi-ai/dist/utils/oauth/index.js'),
+  ].filter(Boolean);
+
+  for (const candidate of candidatePaths) {
+    if (existsSync(candidate)) {
+      return import(pathToFileURL(candidate).href);
+    }
+  }
+
+  throw new Error(
+    `Unable to locate the OpenAI Codex OAuth module. Tried: ${candidatePaths.join(', ')}`
+  );
 }
 
 function sleep(ms) {
@@ -305,6 +370,48 @@ async function runQwen() {
   throw new Error('Qwen OAuth timed out waiting for authorization.');
 }
 
+async function runOpenAICodex() {
+  attachPromptInputBridge();
+  const { loginOpenAICodex } = await loadCodexOAuthModule();
+  const token = await loginOpenAICodex({
+    originator: 'pi',
+    onAuth(info) {
+      emit('open-url', { url: info.url });
+      emit('code', {
+        provider: 'openai-codex',
+        authKind: 'browser-callback',
+        verificationUri: info.url,
+        expiresIn: 600,
+        instructions:
+          info.instructions
+          || 'Complete sign-in in your browser. If the callback does not finish automatically, paste the redirect URL below.',
+      });
+    },
+    onProgress(message) {
+      emit('progress', { provider: 'openai-codex', message });
+    },
+    async onPrompt(prompt) {
+      emit('prompt', {
+        provider: 'openai-codex',
+        message: prompt.message,
+        placeholder: prompt.placeholder || 'http://localhost:1455/auth/callback?code=...',
+      });
+      return waitForPromptInput();
+    },
+  });
+
+  emit('success', {
+    provider: 'openai-codex',
+    token: {
+      access: token.access,
+      refresh: token.refresh,
+      expires: token.expires,
+      accountId: token.accountId,
+      api: 'openai-codex-responses',
+    },
+  });
+}
+
 async function main() {
   if (provider === 'minimax-portal' || provider === 'minimax-portal-cn') {
     await runMiniMax(minimaxRegion === 'cn' ? 'cn' : 'global');
@@ -312,6 +419,10 @@ async function main() {
   }
   if (provider === 'qwen-portal') {
     await runQwen();
+    return;
+  }
+  if (provider === 'openai-codex') {
+    await runOpenAICodex();
     return;
   }
   throw new Error(`Unsupported OAuth provider: ${provider || 'unknown'}`);

@@ -614,10 +614,15 @@ function AddProviderDialog({
   // OAuth Flow State
   const [oauthFlowing, setOauthFlowing] = useState(false);
   const [oauthData, setOauthData] = useState<{
+    authKind?: string;
     verificationUri: string;
-    userCode: string;
+    userCode?: string | null;
     expiresIn: number;
+    instructions?: string | null;
   } | null>(null);
+  const [oauthPrompt, setOauthPrompt] = useState<{ message: string; placeholder?: string | null } | null>(null);
+  const [oauthPromptInput, setOauthPromptInput] = useState('');
+  const [oauthProgressMessage, setOauthProgressMessage] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
   // For providers that support both OAuth and API key, let the user choose
   const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>('oauth');
@@ -638,13 +643,35 @@ function AddProviderDialog({
   // Manage OAuth events
   useEffect(() => {
     const handleCode = (data: unknown) => {
-      setOauthData(data as { verificationUri: string; userCode: string; expiresIn: number });
+      setOauthData(data as {
+        authKind?: string;
+        verificationUri: string;
+        userCode?: string | null;
+        expiresIn: number;
+        instructions?: string | null;
+      });
+      setOauthPrompt(null);
+      setOauthPromptInput('');
       setOauthError(null);
+    };
+
+    const handlePrompt = (data: unknown) => {
+      const payload = data as { message: string; placeholder?: string | null };
+      setOauthPrompt(payload);
+      setOauthProgressMessage(payload.message);
+    };
+
+    const handleProgress = (data: unknown) => {
+      const payload = data as { message?: string | null };
+      setOauthProgressMessage(payload.message || null);
     };
 
     const handleSuccess = async () => {
       setOauthFlowing(false);
       setOauthData(null);
+      setOauthPrompt(null);
+      setOauthPromptInput('');
+      setOauthProgressMessage(null);
       setValidationError(null);
 
       const { onClose: close, t: translate } = latestRef.current;
@@ -672,16 +699,20 @@ function AddProviderDialog({
 
     const handleError = (data: unknown) => {
       setOauthError((data as { message: string }).message);
-      setOauthData(null);
+      setOauthProgressMessage(null);
     };
 
     desktopApi.ipcRenderer.on('oauth:code', handleCode);
+    desktopApi.ipcRenderer.on('oauth:prompt', handlePrompt);
+    desktopApi.ipcRenderer.on('oauth:progress', handleProgress);
     desktopApi.ipcRenderer.on('oauth:success', handleSuccess);
     desktopApi.ipcRenderer.on('oauth:error', handleError);
 
     return () => {
       if (typeof desktopApi.ipcRenderer.off === 'function') {
         desktopApi.ipcRenderer.off('oauth:code', handleCode);
+        desktopApi.ipcRenderer.off('oauth:prompt', handlePrompt);
+        desktopApi.ipcRenderer.off('oauth:progress', handleProgress);
         desktopApi.ipcRenderer.off('oauth:success', handleSuccess);
         desktopApi.ipcRenderer.off('oauth:error', handleError);
       }
@@ -702,6 +733,9 @@ function AddProviderDialog({
 
     setOauthFlowing(true);
     setOauthData(null);
+    setOauthPrompt(null);
+    setOauthPromptInput('');
+    setOauthProgressMessage(null);
     setOauthError(null);
 
     try {
@@ -715,8 +749,23 @@ function AddProviderDialog({
   const handleCancelOAuth = async () => {
     setOauthFlowing(false);
     setOauthData(null);
+    setOauthPrompt(null);
+    setOauthPromptInput('');
+    setOauthProgressMessage(null);
     setOauthError(null);
     await desktopApi.ipcRenderer.invoke('provider:cancelOAuth');
+  };
+
+  const handleSubmitOAuthPrompt = async () => {
+    if (!oauthPromptInput.trim()) return;
+
+    try {
+      await desktopApi.ipcRenderer.invoke('provider:submitOAuthInput', oauthPromptInput.trim());
+      setOauthPromptInput('');
+      setOauthProgressMessage(t('aiProviders.oauth.waitingApproval'));
+    } catch (error) {
+      setOauthError(String(error));
+    }
   };
 
   // Only custom can be added multiple times.
@@ -979,14 +1028,62 @@ function AddProviderDialog({
                               Try Again
                             </Button>
                           </div>
-                        ) : !oauthData ? (
-                          <div className="space-y-3 py-4">
-                            <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
-                            <p className="text-sm text-muted-foreground animate-pulse">{t('aiProviders.oauth.requestingCode')}</p>
+                    ) : !oauthData ? (
+                      <div className="space-y-3 py-4">
+                        <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
+                        <p className="text-sm text-muted-foreground animate-pulse">
+                          {oauthProgressMessage || t('aiProviders.oauth.requestingCode')}
+                        </p>
+                      </div>
+                    ) : oauthData.authKind === 'browser-callback' ? (
+                      <div className="space-y-4 w-full">
+                        <div className="space-y-1">
+                          <h3 className="font-medium text-lg">{t('aiProviders.oauth.browserTitle')}</h3>
+                          <div className="text-sm text-muted-foreground text-left mt-2 space-y-1">
+                            <p>{oauthData.instructions || t('aiProviders.oauth.browserInstructions')}</p>
                           </div>
-                        ) : (
-                          <div className="space-y-4 w-full">
-                            <div className="space-y-1">
+                        </div>
+
+                        <Button
+                          variant="secondary"
+                          className="w-full"
+                          onClick={() => desktopApi.ipcRenderer.invoke('shell:openExternal', oauthData.verificationUri)}
+                        >
+                          <ExternalLink className="h-4 w-4 mr-2" />
+                          {t('aiProviders.oauth.openLoginPage')}
+                        </Button>
+
+                        <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground pt-1">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span>{oauthProgressMessage || t('aiProviders.oauth.waitingApproval')}</span>
+                        </div>
+
+                        {oauthPrompt && (
+                          <div className="space-y-2 rounded-lg border bg-background/60 p-3 text-left">
+                            <p className="text-xs text-muted-foreground">{oauthPrompt.message}</p>
+                            <Input
+                              value={oauthPromptInput}
+                              onChange={(event) => setOauthPromptInput(event.target.value)}
+                              placeholder={oauthPrompt.placeholder || t('aiProviders.oauth.manualPromptPlaceholder')}
+                            />
+                            <Button
+                              variant="outline"
+                              className="w-full"
+                              onClick={handleSubmitOAuthPrompt}
+                              disabled={!oauthPromptInput.trim()}
+                            >
+                              {t('aiProviders.oauth.submitManualCode')}
+                            </Button>
+                          </div>
+                        )}
+
+                        <Button variant="ghost" size="sm" className="w-full mt-2" onClick={handleCancelOAuth}>
+                          {t('aiProviders.oauth.cancel')}
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4 w-full">
+                        <div className="space-y-1">
                               <h3 className="font-medium text-lg text-foreground">{t('aiProviders.oauth.approveLogin')}</h3>
                               <div className="text-sm text-muted-foreground text-left mt-2 space-y-1">
                                 <p>1. {t('aiProviders.oauth.step1')}</p>
@@ -999,15 +1096,17 @@ function AddProviderDialog({
                               <code className="text-2xl font-mono tracking-widest font-bold text-primary">
                                 {oauthData.userCode}
                               </code>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => {
-                                  navigator.clipboard.writeText(oauthData.userCode);
-                                  toast.success(t('aiProviders.oauth.codeCopied'));
-                                }}
-                              >
-                                <Copy className="h-4 w-4" />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              if (oauthData.userCode) {
+                                navigator.clipboard.writeText(oauthData.userCode);
+                                toast.success(t('aiProviders.oauth.codeCopied'));
+                              }
+                            }}
+                          >
+                            <Copy className="h-4 w-4" />
                               </Button>
                             </div>
 
