@@ -21,7 +21,7 @@ export const PROVIDER_TYPES = [
   'custom',
 ] as const;
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
-export type ProviderAuthMode = 'oauth' | 'apikey';
+export type ProviderAuthMode = 'oauth' | 'apikey' | 'token';
 
 export const OLLAMA_PLACEHOLDER_API_KEY = 'ollama-local';
 
@@ -29,6 +29,7 @@ export interface ProviderConfig {
   id: string;
   name: string;
   type: ProviderType;
+  authMode?: ProviderAuthMode;
   baseUrl?: string;
   model?: string;
   fallbackModels?: string[];
@@ -67,6 +68,8 @@ export interface ProviderTypeInfo {
   isOAuth?: boolean;
   /** Whether this provider also accepts a direct API key (in addition to OAuth) */
   supportsApiKey?: boolean;
+  /** Whether this provider also accepts a pasted setup/subscription token */
+  supportsTokenAuth?: boolean;
   /** URL where users can apply for the API Key */
   apiKeyUrl?: string;
 }
@@ -75,7 +78,16 @@ import { providerIcons } from '@/assets/providers';
 
 /** All supported provider types with UI metadata */
 export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
-  { id: 'anthropic', name: 'Anthropic', icon: '🤖', placeholder: 'sk-ant-api03-...', model: 'Claude', requiresApiKey: true },
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    icon: '🤖',
+    placeholder: 'sk-ant-api03-...',
+    model: 'Claude',
+    requiresApiKey: false,
+    supportsApiKey: true,
+    supportsTokenAuth: true,
+  },
   { id: 'openai', name: 'OpenAI', icon: '💚', placeholder: 'sk-proj-...', model: 'GPT', requiresApiKey: true, isOAuth: true, supportsApiKey: true },
   { id: 'openai-codex', name: 'Codex', icon: '💚', placeholder: 'Browser login required', model: 'GPT-5.3 Codex', requiresApiKey: false, isOAuth: true, defaultModelId: 'gpt-5.3-codex' },
   { id: 'google', name: 'Google', icon: '🔷', placeholder: 'AIza...', model: 'Gemini', requiresApiKey: true },
@@ -152,13 +164,22 @@ export function resolveProviderTypeForAuth(
 export function defaultAuthModeForProvider(
   type: ProviderType | string,
   existingTypes: Set<string>,
-  provider?: Pick<ProviderTypeInfo, 'isOAuth'>
+  provider?: Pick<ProviderTypeInfo, 'isOAuth' | 'supportsTokenAuth'>,
+  currentAuthMode?: ProviderAuthMode | null
 ): ProviderAuthMode {
+  if (currentAuthMode === 'oauth' || currentAuthMode === 'apikey' || currentAuthMode === 'token') {
+    return currentAuthMode;
+  }
+
   if (type === 'openai') {
     if (existingTypes.has('openai') && !existingTypes.has('openai-codex')) {
       return 'oauth';
     }
     return 'apikey';
+  }
+
+  if (provider?.supportsTokenAuth) {
+    return 'token';
   }
 
   return provider?.isOAuth ? 'oauth' : 'apikey';

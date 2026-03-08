@@ -105,6 +105,7 @@ import {
   SETUP_PROVIDERS,
   isProviderAuthModeAvailable,
   resolveProviderTypeForAuth,
+  type ProviderAuthMode,
   type ProviderTypeInfo,
   getProviderIconUrl,
   resolveProviderApiKeyForSave,
@@ -1292,11 +1293,12 @@ function ProviderContent({
   const [selectedProviderConfigId, setSelectedProviderConfigId] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [modelId, setModelId] = useState('');
+  const [tokenValue, setTokenValue] = useState('');
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [configuredTypes, setConfiguredTypes] = useState<Set<string>>(new Set());
   const providerMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>('oauth');
+  const [authMode, setAuthMode] = useState<ProviderAuthMode>('oauth');
 
   // OAuth Flow State
   const [oauthFlowing, setOauthFlowing] = useState(false);
@@ -1473,7 +1475,16 @@ function ProviderContent({
         if (preferred && !cancelled) {
           const visibleType = preferred.type === 'openai-codex' ? 'openai' : preferred.type;
           onSelectProvider(visibleType);
-          setAuthMode(defaultAuthModeForProvider(visibleType, nextConfiguredTypes, providers.find((p) => p.id === visibleType)));
+          const savedProvider = await desktopApi.ipcRenderer.invoke(
+            'provider:get',
+            preferred.id
+          ) as { authMode?: ProviderAuthMode | null } | null;
+          setAuthMode(defaultAuthModeForProvider(
+            visibleType,
+            nextConfiguredTypes,
+            providers.find((p) => p.id === visibleType),
+            savedProvider?.authMode ?? null
+          ));
           setSelectedProviderConfigId(preferred.id);
           const typeInfo = providers.find((p) => p.id === visibleType);
           const providerRequiresKey = visibleType === 'openai'
@@ -1516,12 +1527,21 @@ function ProviderContent({
         const savedProvider = await desktopApi.ipcRenderer.invoke(
           'provider:get',
           providerIdForLoad
-        ) as { baseUrl?: string; model?: string } | null;
+        ) as { baseUrl?: string; model?: string; authMode?: ProviderAuthMode | null } | null;
         const storedKey = await desktopApi.ipcRenderer.invoke('provider:getApiKey', providerIdForLoad) as string | null;
         if (!cancelled) {
+          setAuthMode(defaultAuthModeForProvider(
+            selectedProvider,
+            new Set(list.map((item) => item.type)),
+            providers.find((p) => p.id === selectedProvider),
+            savedProvider?.authMode ?? null
+          ));
           if (storedKey) {
             onApiKeyChange(storedKey);
+          } else {
+            onApiKeyChange('');
           }
+          setTokenValue('');
 
           const info = providers.find((p) => p.id === selectedProvider);
           setBaseUrl(savedProvider?.baseUrl || info?.defaultBaseUrl || '');
@@ -1568,13 +1588,19 @@ function ProviderContent({
   const requiresKey = selectedProviderData?.requiresApiKey ?? false;
   const isOAuth = selectedProviderData?.isOAuth ?? false;
   const supportsApiKey = selectedProviderData?.supportsApiKey ?? false;
+  const supportsTokenAuth = selectedProviderData?.supportsTokenAuth ?? false;
   const oauthModeAvailable = selectedProvider
     ? isProviderAuthModeAvailable(selectedProvider, 'oauth', configuredTypes)
     : false;
   const apiKeyModeAvailable = selectedProvider
     ? isProviderAuthModeAvailable(selectedProvider, 'apikey', configuredTypes)
     : false;
+  const tokenModeAvailable = selectedProvider
+    ? isProviderAuthModeAvailable(selectedProvider, 'token', configuredTypes)
+    : false;
   const useOAuthFlow = isOAuth && (!supportsApiKey || authMode === 'oauth');
+  const useTokenMode = supportsTokenAuth && authMode === 'token';
+  const showAuthModeToggle = (isOAuth || supportsTokenAuth) && (supportsApiKey || supportsTokenAuth);
 
   const handleValidateAndSave = async () => {
     if (!selectedProvider) return;
@@ -1591,6 +1617,10 @@ function ProviderContent({
         return;
       }
       if (selectedProvider === 'openai' && !apiKeyModeAvailable) {
+        toast.error(t('settings:aiProviders.toast.failedAdd'));
+        return;
+      }
+      if (selectedProvider === 'anthropic' && useTokenMode && !tokenModeAvailable) {
         toast.error(t('settings:aiProviders.toast.failedAdd'));
         return;
       }
@@ -1637,22 +1667,38 @@ function ProviderContent({
           : (effectiveSelectedProviderType || selectedProvider);
 
       const effectiveApiKey = resolveProviderApiKeyForSave(selectedProvider, apiKey);
+      const providerPayload = {
+        id: providerIdForSave,
+        name: selectedProvider === 'custom' ? t('settings:aiProviders.custom') : (selectedProviderData?.name || selectedProvider),
+        type: providerIdForSave,
+        authMode,
+        baseUrl: baseUrl.trim() || undefined,
+        model: effectiveModelId,
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
 
-      // Save provider config + API key, then set as default
-      const saveResult = await desktopApi.ipcRenderer.invoke(
-        'provider:save',
-        {
-          id: providerIdForSave,
-          name: selectedProvider === 'custom' ? t('settings:aiProviders.custom') : (selectedProviderData?.name || selectedProvider),
-          type: providerIdForSave,
-          baseUrl: baseUrl.trim() || undefined,
-          model: effectiveModelId,
-          enabled: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-        effectiveApiKey
-      ) as { success: boolean; error?: string };
+      let saveResult: { success: boolean; error?: string };
+      if (useTokenMode) {
+        if (!tokenValue.trim()) {
+          toast.error(t('settings:aiProviders.oauth.setupTokenRequired'));
+          setValidating(false);
+          return;
+        }
+
+        saveResult = await desktopApi.ipcRenderer.invoke(
+          'provider:saveTokenAuth',
+          providerPayload,
+          tokenValue.trim()
+        ) as { success: boolean; error?: string };
+      } else {
+        saveResult = await desktopApi.ipcRenderer.invoke(
+          'provider:save',
+          providerPayload,
+          effectiveApiKey
+        ) as { success: boolean; error?: string };
+      }
 
       if (!saveResult.success) {
         throw new Error(saveResult.error || 'Failed to save provider config');
@@ -1684,7 +1730,7 @@ function ProviderContent({
   const isApiKeyRequired = requiresKey || (supportsApiKey && authMode === 'apikey');
   const canSubmit =
     selectedProvider
-    && (isApiKeyRequired ? apiKey.length > 0 : true)
+    && (useTokenMode ? tokenValue.trim().length > 0 : (isApiKeyRequired ? apiKey.length > 0 : true))
     && (showModelIdField ? modelId.trim().length > 0 : true)
     && !useOAuthFlow;
 
@@ -1693,6 +1739,7 @@ function ProviderContent({
     setSelectedProviderConfigId(null);
     onConfiguredChange(false);
     onApiKeyChange('');
+    setTokenValue('');
     setKeyValid(null);
     setProviderMenuOpen(false);
     setAuthMode(defaultAuthModeForProvider(providerId, configuredTypes, providers.find((provider) => provider.id === providerId)));
@@ -1831,32 +1878,50 @@ function ProviderContent({
           )}
 
           {/* Auth mode toggle for providers supporting both */}
-          {isOAuth && supportsApiKey && (
-            <div className="flex rounded-lg border overflow-hidden text-sm">
-              <button
-                onClick={() => oauthModeAvailable && setAuthMode('oauth')}
-                disabled={!oauthModeAvailable}
-                className={cn(
-                  'flex-1 py-2 px-3 transition-colors',
-                  authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
-                  !oauthModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
+          {showAuthModeToggle && (
+            <div className="space-y-2">
+              <div className="flex rounded-lg border overflow-hidden text-sm">
+                {(isOAuth || supportsTokenAuth) && (
+                  <button
+                    onClick={() => {
+                      if ((supportsTokenAuth && tokenModeAvailable) || (isOAuth && oauthModeAvailable)) {
+                        setAuthMode(supportsTokenAuth ? 'token' : 'oauth');
+                      }
+                    }}
+                    disabled={supportsTokenAuth ? !tokenModeAvailable : !oauthModeAvailable}
+                    className={cn(
+                      'flex-1 py-2 px-3 transition-colors',
+                      (supportsTokenAuth ? authMode === 'token' : authMode === 'oauth')
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted text-muted-foreground',
+                      (supportsTokenAuth ? !tokenModeAvailable : !oauthModeAvailable)
+                        && 'cursor-not-allowed opacity-50 hover:bg-transparent'
+                    )}
+                  >
+                    {selectedProvider === 'openai'
+                      ? t('settings:aiProviders.oauth.codexMode')
+                      : supportsTokenAuth
+                        ? t('settings:aiProviders.oauth.setupTokenMode')
+                        : t('settings:aiProviders.oauth.loginMode')}
+                  </button>
                 )}
-              >
-                {selectedProvider === 'openai'
-                  ? t('settings:aiProviders.oauth.codexMode')
-                  : t('settings:aiProviders.oauth.loginMode')}
-              </button>
-              <button
-                onClick={() => apiKeyModeAvailable && setAuthMode('apikey')}
-                disabled={!apiKeyModeAvailable}
-                className={cn(
-                  'flex-1 py-2 px-3 transition-colors',
-                  authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
-                  !apiKeyModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
-                )}
-              >
-                {t('settings:aiProviders.oauth.apikeyMode')}
-              </button>
+                <button
+                  onClick={() => apiKeyModeAvailable && setAuthMode('apikey')}
+                  disabled={!apiKeyModeAvailable}
+                  className={cn(
+                    'flex-1 py-2 px-3 transition-colors',
+                    authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
+                    !apiKeyModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
+                  )}
+                >
+                  {t('settings:aiProviders.oauth.apikeyMode')}
+                </button>
+              </div>
+              {selectedProvider === 'anthropic' && authMode === 'token' && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                  {t('settings:aiProviders.oauth.setupTokenHelp')}
+                </div>
+              )}
             </div>
           )}
 
@@ -1886,6 +1951,37 @@ function ProviderContent({
                   {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
+            </div>
+          )}
+
+          {useTokenMode && (
+            <div className="space-y-2">
+              <Label htmlFor="setupToken">{t('settings:aiProviders.oauth.setupTokenLabel')}</Label>
+              <div className="relative">
+                <Input
+                  id="setupToken"
+                  type={showKey ? 'text' : 'password'}
+                  placeholder={t('settings:aiProviders.oauth.setupTokenPlaceholder')}
+                  value={tokenValue}
+                  onChange={(e) => {
+                    setTokenValue(e.target.value);
+                    onConfiguredChange(false);
+                    setKeyValid(null);
+                  }}
+                  autoComplete="off"
+                  className="pr-10 bg-background border-input"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('settings:aiProviders.oauth.setupTokenHelp')}
+              </p>
             </div>
           )}
 

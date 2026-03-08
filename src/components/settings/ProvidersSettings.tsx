@@ -32,6 +32,7 @@ import {
   PROVIDER_TYPE_INFO,
   resolveProviderTypeForAuth,
   shouldHideProviderTypeInPicker,
+  type ProviderAuthMode,
   type ProviderType,
   getProviderIconUrl,
   resolveProviderApiKeyForSave,
@@ -73,7 +74,9 @@ export function ProvidersSettings() {
     loading,
     fetchProviders,
     addProvider,
+    addProviderWithToken,
     deleteProvider,
+    updateProviderWithToken,
     updateProviderWithKey,
     setDefaultProvider,
     validateApiKey,
@@ -91,7 +94,7 @@ export function ProvidersSettings() {
     type: ProviderType,
     name: string,
     apiKey: string,
-    options?: { baseUrl?: string; model?: string }
+    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode }
   ) => {
     // Only custom supports multiple instances.
     // Built-in providers remain singleton by type.
@@ -103,6 +106,7 @@ export function ProvidersSettings() {
           id,
           type,
           name,
+          authMode: options?.authMode,
           baseUrl: options?.baseUrl,
           model: options?.model,
           enabled: true,
@@ -111,6 +115,38 @@ export function ProvidersSettings() {
       );
 
       // Auto-set as default if no default is currently configured
+      if (!defaultProviderId) {
+        await setDefaultProvider(id);
+      }
+
+      setShowAddDialog(false);
+      toast.success(t('aiProviders.toast.added'));
+    } catch (error) {
+      toast.error(`${t('aiProviders.toast.failedAdd')}: ${error}`);
+    }
+  };
+
+  const handleAddProviderWithToken = async (
+    type: ProviderType,
+    name: string,
+    token: string,
+    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode }
+  ) => {
+    const id = type === 'custom' ? `custom-${crypto.randomUUID()}` : type;
+    try {
+      await addProviderWithToken(
+        {
+          id,
+          type,
+          name,
+          authMode: options?.authMode ?? 'token',
+          baseUrl: options?.baseUrl,
+          model: options?.model,
+          enabled: true,
+        },
+        token.trim()
+      );
+
       if (!defaultProviderId) {
         await setDefaultProvider(id);
       }
@@ -181,11 +217,15 @@ export function ProvidersSettings() {
               onDelete={() => handleDeleteProvider(provider.id)}
               onSetDefault={() => handleSetDefault(provider.id)}
               onSaveEdits={async (payload) => {
-                await updateProviderWithKey(
-                  provider.id,
-                  payload.updates || {},
-                  payload.newApiKey
-                );
+                if (payload.newToken) {
+                  await updateProviderWithToken(
+                    provider.id,
+                    payload.updates || {},
+                    payload.newToken
+                  );
+                  return;
+                }
+                await updateProviderWithKey(provider.id, payload.updates || {}, payload.newApiKey);
                 setEditingProvider(null);
               }}
               onValidateKey={(key, options) => validateApiKey(provider.id, key, options)}
@@ -201,6 +241,7 @@ export function ProvidersSettings() {
           existingTypes={new Set(providers.map((p) => p.type))}
           onClose={() => setShowAddDialog(false)}
           onAdd={handleAddProvider}
+          onAddToken={handleAddProviderWithToken}
           onValidateKey={(type, key, options) => validateApiKey(type, key, options)}
           devModeUnlocked={devModeUnlocked}
         />
@@ -218,7 +259,11 @@ interface ProviderCardProps {
   onCancelEdit: () => void;
   onDelete: () => void;
   onSetDefault: () => void;
-  onSaveEdits: (payload: { newApiKey?: string; updates?: Partial<ProviderConfig> }) => Promise<void>;
+  onSaveEdits: (payload: {
+    newApiKey?: string;
+    newToken?: string;
+    updates?: Partial<ProviderConfig>;
+  }) => Promise<void>;
   onValidateKey: (
     key: string,
     options?: { baseUrl?: string }
@@ -258,6 +303,27 @@ function ProviderCard({
   const typeInfo = PROVIDER_TYPE_INFO.find((t) => t.id === provider.type);
   const showModelIdField = shouldShowProviderModelId(typeInfo, devModeUnlocked);
   const canEditModelConfig = Boolean(typeInfo?.showBaseUrl || showModelIdField);
+  const usesTokenAuth = provider.authMode === 'token';
+  const credentialLabel = usesTokenAuth
+    ? t('aiProviders.oauth.setupTokenLabel')
+    : t('aiProviders.dialog.apiKey');
+  const credentialConfiguredText = usesTokenAuth
+    ? t('aiProviders.oauth.setupTokenConfigured')
+    : t('aiProviders.dialog.apiKeyConfigured');
+  const credentialMissingText = usesTokenAuth
+    ? t('aiProviders.oauth.setupTokenMissing')
+    : t('aiProviders.dialog.apiKeyMissing');
+  const credentialReplaceLabel = usesTokenAuth
+    ? t('aiProviders.oauth.replaceSetupToken')
+    : t('aiProviders.dialog.replaceApiKey');
+  const credentialReplaceHelp = usesTokenAuth
+    ? t('aiProviders.oauth.replaceSetupTokenHelp')
+    : t('aiProviders.dialog.replaceApiKeyHelp');
+  const credentialPlaceholder = usesTokenAuth
+    ? t('aiProviders.oauth.setupTokenPlaceholder')
+    : (typeInfo?.requiresApiKey
+        ? typeInfo?.placeholder
+        : (typeInfo?.id === 'ollama' ? t('aiProviders.notRequired') : t('aiProviders.card.editKey')));
 
   useEffect(() => {
     if (isEditing) {
@@ -284,9 +350,12 @@ function ProviderCard({
     setSaving(true);
     try {
       const payload: { newApiKey?: string; updates?: Partial<ProviderConfig> } = {};
+      const tokenPayload: { newToken?: string } = {};
       const normalizedFallbackModels = normalizeFallbackModels(fallbackModelsText.split('\n'));
 
-      if (newKey.trim()) {
+      if (newKey.trim() && usesTokenAuth) {
+        tokenPayload.newToken = newKey.trim();
+      } else if (newKey.trim()) {
         setValidating(true);
         const result = await onValidateKey(newKey, {
           baseUrl: baseUrl.trim() || undefined,
@@ -331,13 +400,13 @@ function ProviderCard({
         payload.newApiKey = resolveProviderApiKeyForSave(provider.type, '') as string;
       }
 
-      if (!payload.newApiKey && !payload.updates) {
+      if (!payload.newApiKey && !tokenPayload.newToken && !payload.updates) {
         onCancelEdit();
         setSaving(false);
         return;
       }
 
-      await onSaveEdits(payload);
+      await onSaveEdits({ ...payload, ...tokenPayload });
       setNewKey('');
       toast.success(t('aiProviders.toast.updated'));
     } catch (error) {
@@ -436,11 +505,11 @@ function ProviderCard({
             <div className="space-y-3 rounded-md border p-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="space-y-1">
-                  <Label className="text-xs">{t('aiProviders.dialog.apiKey')}</Label>
+                  <Label className="text-xs">{credentialLabel}</Label>
                   <p className="text-xs text-muted-foreground">
                     {provider.hasKey
-                      ? t('aiProviders.dialog.apiKeyConfigured')
-                      : t('aiProviders.dialog.apiKeyMissing')}
+                      ? credentialConfiguredText
+                      : credentialMissingText}
                   </p>
                 </div>
                 {provider.hasKey ? (
@@ -461,12 +530,12 @@ function ProviderCard({
                 </div>
               )}
               <div className="space-y-1">
-                <Label className="text-xs">{t('aiProviders.dialog.replaceApiKey')}</Label>
+                <Label className="text-xs">{credentialReplaceLabel}</Label>
                 <div className="flex gap-2">
                   <div className="relative flex-1">
                     <Input
                       type={showKey ? 'text' : 'password'}
-                      placeholder={typeInfo?.requiresApiKey ? typeInfo?.placeholder : (typeInfo?.id === 'ollama' ? t('aiProviders.notRequired') : t('aiProviders.card.editKey'))}
+                      placeholder={credentialPlaceholder}
                       value={newKey}
                       onChange={(e) => setNewKey(e.target.value)}
                       className="pr-10 h-9 text-sm"
@@ -507,7 +576,7 @@ function ProviderCard({
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {t('aiProviders.dialog.replaceApiKeyHelp')}
+                  {credentialReplaceHelp}
                 </p>
               </div>
             </div>
@@ -588,7 +657,13 @@ interface AddProviderDialogProps {
     type: ProviderType,
     name: string,
     apiKey: string,
-    options?: { baseUrl?: string; model?: string }
+    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode }
+  ) => Promise<void>;
+  onAddToken: (
+    type: ProviderType,
+    name: string,
+    token: string,
+    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode }
   ) => Promise<void>;
   onValidateKey: (
     type: string,
@@ -602,6 +677,7 @@ function AddProviderDialog({
   existingTypes,
   onClose,
   onAdd,
+  onAddToken,
   onValidateKey,
   devModeUnlocked,
 }: AddProviderDialogProps) {
@@ -609,6 +685,7 @@ function AddProviderDialog({
   const [selectedType, setSelectedType] = useState<ProviderType | null>(null);
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [tokenValue, setTokenValue] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [modelId, setModelId] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -629,12 +706,13 @@ function AddProviderDialog({
   const [oauthProgressMessage, setOauthProgressMessage] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
   // For providers that support both OAuth and API key, let the user choose
-  const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>('oauth');
+  const [authMode, setAuthMode] = useState<ProviderAuthMode>('oauth');
 
   const typeInfo = PROVIDER_TYPE_INFO.find((t) => t.id === selectedType);
   const showModelIdField = shouldShowProviderModelId(typeInfo, devModeUnlocked);
   const isOAuth = typeInfo?.isOAuth ?? false;
   const supportsApiKey = typeInfo?.supportsApiKey ?? false;
+  const supportsTokenAuth = typeInfo?.supportsTokenAuth ?? false;
   const effectiveSelectedType = selectedType
     ? resolveProviderTypeForAuth(selectedType, authMode)
     : null;
@@ -644,8 +722,13 @@ function AddProviderDialog({
   const apiKeyModeAvailable = selectedType
     ? isProviderAuthModeAvailable(selectedType, 'apikey', existingTypes)
     : false;
+  const tokenModeAvailable = selectedType
+    ? isProviderAuthModeAvailable(selectedType, 'token', existingTypes)
+    : false;
   // Effective OAuth mode: pure OAuth providers, or dual-mode with oauth selected
   const useOAuthFlow = isOAuth && (!supportsApiKey || authMode === 'oauth');
+  const useTokenMode = supportsTokenAuth && authMode === 'token';
+  const showAuthModeToggle = (isOAuth || supportsTokenAuth) && (supportsApiKey || supportsTokenAuth);
 
   // Keep a ref to the latest values so the effect closure can access them
   const latestRef = React.useRef({ selectedType, effectiveSelectedType, typeInfo, onAdd, onClose, t });
@@ -810,13 +893,17 @@ function AddProviderDialog({
       toast.error(t('aiProviders.toast.failedAdd'));
       return;
     }
+    if (selectedType === 'anthropic' && useTokenMode && !tokenModeAvailable) {
+      toast.error(t('aiProviders.toast.failedAdd'));
+      return;
+    }
 
     setSaving(true);
     setValidationError(null);
 
     try {
       // Validate key first if the provider requires one and a key was entered
-      const requiresKey = typeInfo?.requiresApiKey ?? false;
+      const requiresKey = (typeInfo?.requiresApiKey ?? false) || (supportsApiKey && authMode === 'apikey');
       if (requiresKey && !apiKey.trim()) {
         setValidationError(t('aiProviders.toast.invalidKey')); // reusing invalid key msg or should add 'required' msg? null checks
         setSaving(false);
@@ -833,6 +920,12 @@ function AddProviderDialog({
         }
       }
 
+      if (useTokenMode && !tokenValue.trim()) {
+        setValidationError(t('aiProviders.oauth.setupTokenRequired'));
+        setSaving(false);
+        return;
+      }
+
       const requiresModel = showModelIdField;
       if (requiresModel && !modelId.trim()) {
         setValidationError(t('aiProviders.toast.modelRequired'));
@@ -840,14 +933,29 @@ function AddProviderDialog({
         return;
       }
 
+      const resolvedName =
+        name || (typeInfo?.id === 'custom' ? t('aiProviders.custom') : typeInfo?.name) || selectedType;
+      const resolvedOptions = {
+        authMode,
+        baseUrl: baseUrl.trim() || undefined,
+        model: resolveProviderModelForSave(typeInfo, modelId, devModeUnlocked),
+      };
+
+      if (useTokenMode) {
+        await onAddToken(
+          selectedType,
+          resolvedName,
+          tokenValue.trim(),
+          resolvedOptions
+        );
+        return;
+      }
+
       await onAdd(
         selectedType,
-        name || (typeInfo?.id === 'custom' ? t('aiProviders.custom') : typeInfo?.name) || selectedType,
+        resolvedName,
         apiKey.trim(),
-        {
-          baseUrl: baseUrl.trim() || undefined,
-          model: resolveProviderModelForSave(typeInfo, modelId, devModeUnlocked),
-        }
+        resolvedOptions
       );
     } catch {
       // error already handled via toast in parent
@@ -874,6 +982,9 @@ function AddProviderDialog({
                   onClick={() => {
                     setSelectedType(type.id);
                     setName(type.id === 'custom' ? t('aiProviders.custom') : type.name);
+                    setApiKey('');
+                    setTokenValue('');
+                    setValidationError(null);
                     setBaseUrl(type.defaultBaseUrl || '');
                     setModelId(type.defaultModelId || '');
                     setAuthMode(defaultAuthModeForProvider(type.id, existingTypes, type));
@@ -903,6 +1014,8 @@ function AddProviderDialog({
                     onClick={() => {
                       setSelectedType(null);
                       setValidationError(null);
+                      setApiKey('');
+                      setTokenValue('');
                       setBaseUrl('');
                       setModelId('');
                     }}
@@ -924,20 +1037,33 @@ function AddProviderDialog({
               </div>
 
               {/* Auth mode toggle for providers supporting both */}
-              {isOAuth && supportsApiKey && (
+              {showAuthModeToggle && (
                 <div className="space-y-2">
                   <div className="flex rounded-lg border overflow-hidden text-sm">
-                    <button
-                      onClick={() => oauthModeAvailable && setAuthMode('oauth')}
-                      disabled={!oauthModeAvailable}
-                      className={cn(
-                        'flex-1 py-2 px-3 transition-colors',
-                        authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
-                        !oauthModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
-                      )}
-                    >
-                      {selectedType === 'openai' ? t('aiProviders.oauth.codexMode') : t('aiProviders.oauth.loginMode')}
-                    </button>
+                    {(isOAuth || supportsTokenAuth) && (
+                      <button
+                        onClick={() => {
+                          if ((supportsTokenAuth && tokenModeAvailable) || (isOAuth && oauthModeAvailable)) {
+                            setAuthMode(supportsTokenAuth ? 'token' : 'oauth');
+                          }
+                        }}
+                        disabled={supportsTokenAuth ? !tokenModeAvailable : !oauthModeAvailable}
+                        className={cn(
+                          'flex-1 py-2 px-3 transition-colors',
+                          (supportsTokenAuth ? authMode === 'token' : authMode === 'oauth')
+                            ? 'bg-primary text-primary-foreground'
+                            : 'hover:bg-muted text-muted-foreground',
+                          (supportsTokenAuth ? !tokenModeAvailable : !oauthModeAvailable)
+                            && 'cursor-not-allowed opacity-50 hover:bg-transparent'
+                        )}
+                      >
+                        {selectedType === 'openai'
+                          ? t('aiProviders.oauth.codexMode')
+                          : supportsTokenAuth
+                            ? t('aiProviders.oauth.setupTokenMode')
+                            : t('aiProviders.oauth.loginMode')}
+                      </button>
+                    )}
                     <button
                       onClick={() => apiKeyModeAvailable && setAuthMode('apikey')}
                       disabled={!apiKeyModeAvailable}
@@ -958,6 +1084,11 @@ function AddProviderDialog({
                   {selectedType === 'openai' && !apiKeyModeAvailable && (
                     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
                       {t('aiProviders.oauth.apiKeyConfiguredHint')}
+                    </div>
+                  )}
+                  {selectedType === 'anthropic' && authMode === 'token' && (
+                    <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                      {t('aiProviders.oauth.setupTokenHelp')}
                     </div>
                   )}
                 </div>
@@ -1005,6 +1136,38 @@ function AddProviderDialog({
                   )}
                   <p className="text-xs text-muted-foreground">
                     {t('aiProviders.dialog.apiKeyStored')}
+                  </p>
+                </div>
+              )}
+
+              {useTokenMode && (
+                <div className="space-y-2">
+                  <Label htmlFor="setupToken">{t('aiProviders.oauth.setupTokenLabel')}</Label>
+                  <div className="relative">
+                    <Input
+                      id="setupToken"
+                      type={showKey ? 'text' : 'password'}
+                      placeholder={t('aiProviders.oauth.setupTokenPlaceholder')}
+                      value={tokenValue}
+                      onChange={(e) => {
+                        setTokenValue(e.target.value);
+                        setValidationError(null);
+                      }}
+                      className="pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey(!showKey)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  {validationError && (
+                    <p className="text-xs text-destructive">{validationError}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    {t('aiProviders.oauth.setupTokenHelp')}
                   </p>
                 </div>
               )}

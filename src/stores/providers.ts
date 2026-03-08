@@ -18,7 +18,13 @@ interface ProviderState {
   // Actions
   fetchProviders: () => Promise<void>;
   addProvider: (config: Omit<ProviderConfig, 'createdAt' | 'updatedAt'>, apiKey?: string) => Promise<void>;
+  addProviderWithToken: (config: Omit<ProviderConfig, 'createdAt' | 'updatedAt'>, token: string) => Promise<void>;
   updateProvider: (providerId: string, updates: Partial<ProviderConfig>, apiKey?: string) => Promise<void>;
+  updateProviderWithToken: (
+    providerId: string,
+    updates: Partial<ProviderConfig>,
+    token: string
+  ) => Promise<void>;
   deleteProvider: (providerId: string) => Promise<void>;
   setApiKey: (providerId: string, apiKey: string) => Promise<void>;
   updateProviderWithKey: (
@@ -80,6 +86,31 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       throw error;
     }
   },
+
+  addProviderWithToken: async (config, token) => {
+    try {
+      const fullConfig: ProviderConfig = {
+        ...config,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const result = await desktopApi.ipcRenderer.invoke(
+        'provider:saveTokenAuth',
+        fullConfig,
+        token
+      ) as { success: boolean; error?: string };
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to save provider token auth');
+      }
+
+      await get().fetchProviders();
+    } catch (error) {
+      console.error('Failed to add provider with token:', error);
+      throw error;
+    }
+  },
   
   updateProvider: async (providerId, updates, apiKey) => {
     try {
@@ -106,6 +137,38 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       await get().fetchProviders();
     } catch (error) {
       console.error('Failed to update provider:', error);
+      throw error;
+    }
+  },
+
+  updateProviderWithToken: async (providerId, updates, token) => {
+    try {
+      const existing = get().providers.find((p) => p.id === providerId);
+      if (!existing) {
+        throw new Error('Provider not found');
+      }
+
+      const { hasKey: _hasKey, keyMasked: _keyMasked, ...providerConfig } = existing;
+
+      const updatedConfig: ProviderConfig = {
+        ...providerConfig,
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const result = await desktopApi.ipcRenderer.invoke(
+        'provider:saveTokenAuth',
+        updatedConfig,
+        token
+      ) as { success: boolean; error?: string };
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to update provider token auth');
+      }
+
+      await get().fetchProviders();
+    } catch (error) {
+      console.error('Failed to update provider with token:', error);
       throw error;
     }
   },
