@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev:web",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm run build:vite && pnpm run uv:download && pnpm run node:prepare && zx scripts/bundle-openclaw.mjs && zx scripts/bundle-openclaw-plugins.mjs && zx scripts/bundle-clawhub.mjs",
+    "beforeBuildCommand": "zx scripts/prepare-tauri-build.mjs",
     "frontendDist": "../dist"
   },
   "app": {
@@ -30,10 +30,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "../build/openclaw",
       "../build/openclaw-plugins",
       "../build/clawhub",
-      "../resources/bin",
       "../scripts/tauri"
     ],
     "icon": [
