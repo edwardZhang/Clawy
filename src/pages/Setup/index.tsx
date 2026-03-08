@@ -383,7 +383,6 @@ interface RuntimeInstallResponse {
     version?: string;
   };
 }
-
 function formatRuntimeSource(source?: 'path' | 'managed' | 'bundled' | 'nodeModules') {
   switch (source) {
     case 'path':
@@ -734,7 +733,6 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       }
     };
   }, [gatewayStatus.state, runtimeReady, t]);
-
   const handleInstallNode = async () => {
     dispatchChecks({
       type: 'set',
