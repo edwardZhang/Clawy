@@ -149,6 +149,45 @@
     "errorDetails": "エラー詳細：",
     "help": "自動アップデートが有効な場合、更新は自動的にダウンロードされインストールされます。"
   },
+  "openclawRuntime": {
+    "title": "OpenClaw ランタイム",
+    "description": "Clawy 本体とは独立して OpenClaw ランタイムを確認・更新します。",
+    "currentVersion": "現在のランタイムバージョン",
+    "latestVersion": "最新の利用可能バージョン",
+    "managedVersion": "管理対象ランタイムバージョン",
+    "runtimePath": "ランタイムパス",
+    "source": "ランタイムソース",
+    "channel": "更新チャネル",
+    "plan": "予定されている更新アクション",
+    "restartNote": "OpenClaw ランタイムの更新に成功すると Gateway は自動的に再起動します。",
+    "installNote": "Clawy がまだ bundled または workspace ランタイムを使っている場合、更新をインストールすると管理対象 OpenClaw ランタイムへ切り替わります。",
+    "notInstalled": "未インストール",
+    "unknown": "不明",
+    "status": {
+      "upToDate": "最新です",
+      "updateAvailable": "更新あり"
+    },
+    "actions": {
+      "check": "OpenClaw 更新を確認",
+      "checking": "確認中...",
+      "install": "最新の OpenClaw をインストール",
+      "installing": "インストール中..."
+    },
+    "phases": {
+      "preparing": "ダウンロードを準備しています...",
+      "downloading": "パッケージをダウンロードしています...",
+      "installing": "ランタイムをインストールしています...",
+      "completed": "インストールが完了しました。",
+      "failed": "インストールに失敗しました。"
+    },
+    "toast": {
+      "upToDate": "OpenClaw は最新です。",
+      "updateAvailable": "OpenClaw {{version}} が利用可能です。",
+      "updated": "OpenClaw {{version}} をインストールし、Gateway を再起動しました。",
+      "checkFailed": "OpenClaw 更新の確認に失敗しました: {{error}}",
+      "installFailed": "OpenClaw 更新のインストールに失敗しました: {{error}}"
+    }
+  },
   "advanced": {
     "title": "詳細設定",
     "description": "上級ユーザー向けオプション",

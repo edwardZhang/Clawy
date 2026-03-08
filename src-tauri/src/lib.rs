@@ -2502,11 +2502,15 @@ fn install_recommended_managed_openclaw_release() -> Result<ManagedOpenClawInsta
     install_managed_openclaw_release(&payload)
 }
 
-fn install_recommended_managed_openclaw_release_with_progress(
+fn install_managed_openclaw_release_with_progress(
     app: &AppHandle,
+    payload: &ManagedOpenClawInstallPayload,
 ) -> Result<ManagedOpenClawInstallResult, String> {
     let kind = ManagedRuntimeKind::OpenClaw;
-    let version = recommended_openclaw_version()?;
+    let version = payload.version.trim().to_string();
+    if version.is_empty() {
+        return Err("Managed OpenClaw version is required".into());
+    }
 
     emit_runtime_install_progress(
         app,
@@ -2583,6 +2587,15 @@ fn install_recommended_managed_openclaw_release_with_progress(
     );
 
     Ok(result)
+}
+
+fn install_recommended_managed_openclaw_release_with_progress(
+    app: &AppHandle,
+) -> Result<ManagedOpenClawInstallResult, String> {
+    let payload = ManagedOpenClawInstallPayload {
+        version: recommended_openclaw_version()?,
+    };
+    install_managed_openclaw_release_with_progress(app, &payload)
 }
 
 fn switch_managed_node_version_in_base(
@@ -2985,6 +2998,104 @@ fn openclaw_status() -> Value {
         "version": version,
         "diagnostics": diagnostics,
     })
+}
+
+fn run_openclaw_cli_json(args: &[&str]) -> Result<Value, String> {
+    let mut command = openclaw_command()?;
+    command
+        .args(args)
+        .arg("--json")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = command
+        .output()
+        .map_err(|err| format!("Failed to run OpenClaw CLI: {err}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if !output.status.success() {
+        let detail = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("exit code {:?}", output.status.code())
+        };
+        return Err(format!("OpenClaw CLI command failed: {detail}"));
+    }
+
+    serde_json::from_str::<Value>(&stdout)
+        .map_err(|err| format!("Failed to parse OpenClaw CLI JSON output: {err}. Raw: {stdout}"))
+}
+
+fn openclaw_update_status() -> Result<Value, String> {
+    let resolution = resolve_openclaw_runtime();
+    let current_version = resolution.version.clone();
+    let current_source = resolution.source.map(OpenClawRuntimeSource::as_str);
+    let current_dir = resolution.dir.clone();
+    let managed_version =
+        managed_runtime_current_version_from_base(&clawy_base_dir(), ManagedRuntimeKind::OpenClaw);
+
+    let update_status = run_openclaw_cli_json(&["update", "status"])?;
+    let dry_run = run_openclaw_cli_json(&["update", "--dry-run", "--yes"]).ok();
+
+    let latest_version = update_status
+        .pointer("/availability/latestVersion")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| recommended_openclaw_version().ok());
+
+    let comparison_version = managed_version
+        .clone()
+        .or_else(|| current_version.clone());
+    let update_available = latest_version
+        .as_deref()
+        .zip(comparison_version.as_deref())
+        .map(|(latest, current)| latest != current)
+        .unwrap_or(false);
+
+    Ok(json!({
+        "success": true,
+        "currentVersion": current_version,
+        "currentSource": current_source,
+        "currentDir": current_dir,
+        "managedVersion": managed_version,
+        "latestVersion": latest_version,
+        "updateAvailable": update_available,
+        "channel": update_status.get("channel").cloned().unwrap_or(Value::Null),
+        "availability": update_status.get("availability").cloned().unwrap_or(Value::Null),
+        "dryRun": dry_run.unwrap_or(Value::Null),
+        "status": update_status,
+        "diagnostics": resolution.diagnostics,
+    }))
+}
+
+fn install_openclaw_update(
+    app: &AppHandle,
+    state: &BridgeState,
+    payload: Option<ManagedOpenClawInstallPayload>,
+) -> Result<Value, String> {
+    let resolved_payload = match payload {
+        Some(payload) if !payload.version.trim().is_empty() => payload,
+        _ => ManagedOpenClawInstallPayload {
+            version: recommended_openclaw_version()?,
+        },
+    };
+
+    let result = install_managed_openclaw_release_with_progress(app, &resolved_payload)?;
+    let gateway_restart = gateway_restart_internal(app, state)?;
+    let latest_status = openclaw_update_status().ok();
+
+    Ok(json!({
+        "success": true,
+        "result": result,
+        "targetVersion": resolved_payload.version,
+        "gatewayRestart": gateway_restart,
+        "status": latest_status,
+    }))
 }
 
 fn mask_key(key: &str) -> String {
@@ -3777,7 +3888,9 @@ fn openclaw_command() -> Result<Command, String> {
 
     let mut command = Command::new(node_binary);
     apply_proxy_env(&mut command, &load_settings());
-    command.arg(entry);
+    command
+        .arg(entry)
+        .current_dir(openclaw_resolution.dir.unwrap_or_else(workspace_openclaw_dir));
     Ok(command)
 }
 
@@ -7771,6 +7884,19 @@ fn invoke_ipc(
         "openclaw:getSkillsDir" => {
             ensure_dir(&openclaw_skills_dir())?;
             Ok(json!(openclaw_skills_dir()))
+        }
+        "openclaw:getUpdateStatus" => Ok(openclaw_update_status()?),
+        "openclaw:installUpdate" => {
+            let payload = args
+                .get(0)
+                .cloned()
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    serde_json::from_value::<ManagedOpenClawInstallPayload>(value)
+                        .map_err(|err| format!("Invalid OpenClaw update payload: {err}"))
+                })
+                .transpose()?;
+            Ok(install_openclaw_update(&app, &state, payload)?)
         }
         "openclaw:getCliCommand" => {
             let node_resolution = resolve_node_binary();

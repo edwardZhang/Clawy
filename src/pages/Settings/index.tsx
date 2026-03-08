@@ -3,7 +3,7 @@ import { desktopApi } from '@/lib/desktop/api';
  * Settings Page
  * Application configuration
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Sun,
   Moon,
@@ -23,6 +23,7 @@ import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { useSettingsStore } from '@/stores/settings';
 import { useGatewayStore } from '@/stores/gateway';
@@ -36,6 +37,84 @@ type ControlUiInfo = {
   token: string;
   port: number;
 };
+
+type RuntimeInstallEventPayload = {
+  runtime?: 'nodejs' | 'openclaw';
+  phase?: 'preparing' | 'downloading' | 'installing' | 'completed' | 'failed';
+  status?: 'running' | 'completed' | 'failed';
+  percent?: number;
+  version?: string;
+  detail?: string;
+  error?: string;
+  progress?: {
+    total?: number;
+    transferred?: number;
+    bytesPerSecond?: number;
+  };
+};
+
+type OpenClawUpdateStatus = {
+  success?: boolean;
+  currentVersion?: string | null;
+  currentSource?: 'managed' | 'nodeModules' | 'bundled' | null;
+  currentDir?: string | null;
+  managedVersion?: string | null;
+  latestVersion?: string | null;
+  updateAvailable?: boolean;
+  channel?: {
+    value?: string;
+    label?: string;
+    source?: string;
+  } | null;
+  availability?: {
+    available?: boolean;
+    hasRegistryUpdate?: boolean;
+    latestVersion?: string;
+  } | null;
+  dryRun?: {
+    actions?: string[];
+    effectiveChannel?: string;
+    tag?: string;
+  } | null;
+};
+
+function formatRuntimeSource(source?: OpenClawUpdateStatus['currentSource']): string {
+  switch (source) {
+    case 'managed':
+      return 'Managed runtime';
+    case 'nodeModules':
+      return 'Workspace package';
+    case 'bundled':
+      return 'Bundled runtime';
+    default:
+      return 'Unknown';
+  }
+}
+
+function formatBytes(bytes?: number): string {
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return unitIndex === 0 ? `${Math.round(value)} ${units[unitIndex]}` : `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function describeInstallProgress(payload: RuntimeInstallEventPayload): string | undefined {
+  if (payload.detail) {
+    return payload.detail;
+  }
+  if (payload.progress?.total) {
+    return `${formatBytes(payload.progress.transferred)} / ${formatBytes(payload.progress.total)}`;
+  }
+  if (payload.progress?.transferred) {
+    return `${formatBytes(payload.progress.transferred)} downloaded`;
+  }
+  return undefined;
+}
 
 export function Settings() {
   const { t } = useTranslation('settings');
@@ -79,6 +158,11 @@ export function Settings() {
   const [proxyBypassRulesDraft, setProxyBypassRulesDraft] = useState('');
   const [proxyEnabledDraft, setProxyEnabledDraft] = useState(false);
   const [savingProxy, setSavingProxy] = useState(false);
+  const [openclawRuntimeStatus, setOpenclawRuntimeStatus] = useState<OpenClawUpdateStatus | null>(null);
+  const [openclawRuntimeLoading, setOpenclawRuntimeLoading] = useState(false);
+  const [openclawRuntimeInstalling, setOpenclawRuntimeInstalling] = useState(false);
+  const [openclawRuntimeError, setOpenclawRuntimeError] = useState<string | null>(null);
+  const [openclawInstallProgress, setOpenclawInstallProgress] = useState<RuntimeInstallEventPayload | null>(null);
 
   const isWindows = desktopApi.platform === 'win32';
   const showCliTools = true;
@@ -104,6 +188,53 @@ export function Settings() {
       }
     } catch {
       // ignore
+    }
+  };
+
+  const loadOpenClawRuntimeStatus = useCallback(async (showToast = false) => {
+    setOpenclawRuntimeLoading(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('openclaw:getUpdateStatus') as OpenClawUpdateStatus;
+      setOpenclawRuntimeStatus(result);
+      setOpenclawRuntimeError(null);
+      if (showToast) {
+        if (result.updateAvailable && result.latestVersion) {
+          toast.success(t('openclawRuntime.toast.updateAvailable', { version: result.latestVersion }));
+        } else {
+          toast.success(t('openclawRuntime.toast.upToDate'));
+        }
+      }
+    } catch (error) {
+      const message = String(error);
+      setOpenclawRuntimeError(message);
+      if (showToast) {
+        toast.error(t('openclawRuntime.toast.checkFailed', { error: message }));
+      }
+    } finally {
+      setOpenclawRuntimeLoading(false);
+    }
+  }, [t]);
+
+  const handleInstallOpenClawUpdate = async () => {
+    setOpenclawRuntimeInstalling(true);
+    setOpenclawRuntimeError(null);
+    try {
+      const payload = openclawRuntimeStatus?.latestVersion
+        ? { version: openclawRuntimeStatus.latestVersion }
+        : undefined;
+      const result = await desktopApi.ipcRenderer.invoke('openclaw:installUpdate', payload) as {
+        targetVersion?: string;
+      };
+      const version = result?.targetVersion || openclawRuntimeStatus?.latestVersion || '';
+      toast.success(t('openclawRuntime.toast.updated', { version }));
+      await loadOpenClawRuntimeStatus();
+    } catch (error) {
+      const message = String(error);
+      setOpenclawRuntimeError(message);
+      toast.error(t('openclawRuntime.toast.installFailed', { error: message }));
+    } finally {
+      setOpenclawRuntimeInstalling(false);
+      setOpenclawInstallProgress(null);
     }
   };
 
@@ -202,7 +333,33 @@ export function Settings() {
       },
     );
     return () => { unsubscribe?.(); };
-  }, []);
+  }, [loadOpenClawRuntimeStatus]);
+
+  useEffect(() => {
+    void loadOpenClawRuntimeStatus();
+  }, [loadOpenClawRuntimeStatus]);
+
+  useEffect(() => {
+    const unsubscribe = desktopApi.ipcRenderer.on('runtime:install-progress', (payload) => {
+      const event = payload as RuntimeInstallEventPayload;
+      if (event.runtime !== 'openclaw') {
+        return;
+      }
+
+      setOpenclawInstallProgress(event);
+
+      if (event.status === 'failed') {
+        setOpenclawRuntimeError(event.error || event.detail || null);
+        setOpenclawRuntimeInstalling(false);
+      }
+
+      if (event.status === 'completed') {
+        void loadOpenClawRuntimeStatus();
+      }
+    });
+
+    return () => { unsubscribe?.(); };
+  }, [loadOpenClawRuntimeStatus]);
 
   useEffect(() => {
     setProxyEnabledDraft(proxyEnabled);
@@ -552,6 +709,125 @@ export function Settings() {
                 updateSetAutoDownload(value);
               }}
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('openclawRuntime.title')}</CardTitle>
+          <CardDescription>{t('openclawRuntime.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label>{t('openclawRuntime.currentVersion')}</Label>
+              <p className="text-sm font-medium">
+                {openclawRuntimeStatus?.currentVersion || t('openclawRuntime.notInstalled')}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t('openclawRuntime.source')}: {formatRuntimeSource(openclawRuntimeStatus?.currentSource ?? undefined)}
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <Label>{t('openclawRuntime.latestVersion')}</Label>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium">
+                  {openclawRuntimeStatus?.latestVersion || t('openclawRuntime.unknown')}
+                </p>
+                <Badge
+                  variant={
+                    openclawRuntimeStatus?.updateAvailable
+                      ? 'secondary'
+                      : 'success'
+                  }
+                >
+                  {openclawRuntimeStatus?.updateAvailable
+                    ? t('openclawRuntime.status.updateAvailable')
+                    : t('openclawRuntime.status.upToDate')}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('openclawRuntime.channel')}: {openclawRuntimeStatus?.channel?.label || openclawRuntimeStatus?.channel?.value || t('openclawRuntime.unknown')}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label>{t('openclawRuntime.managedVersion')}</Label>
+              <p className="text-sm text-muted-foreground">
+                {openclawRuntimeStatus?.managedVersion || t('openclawRuntime.notInstalled')}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <Label>{t('openclawRuntime.runtimePath')}</Label>
+              <p className="text-xs text-muted-foreground break-all">
+                {openclawRuntimeStatus?.currentDir || t('openclawRuntime.unknown')}
+              </p>
+            </div>
+          </div>
+
+          {openclawRuntimeStatus?.dryRun?.actions?.length ? (
+            <div className="space-y-2 rounded-lg border border-border/60 bg-background/40 p-3">
+              <Label>{t('openclawRuntime.plan')}</Label>
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {openclawRuntimeStatus.dryRun.actions.map((action) => (
+                  <li key={action}>• {action}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {openclawInstallProgress ? (
+            <div className="space-y-2 rounded-lg border border-border/60 bg-background/40 p-3">
+              <div className="flex items-center justify-between text-sm">
+                <span>{t(`openclawRuntime.phases.${openclawInstallProgress.phase || 'installing'}`)}</span>
+                <span>{Math.round(openclawInstallProgress.percent || 0)}%</span>
+              </div>
+              <Progress value={openclawInstallProgress.percent || 0} className="h-2" />
+              {describeInstallProgress(openclawInstallProgress) ? (
+                <p className="text-xs text-muted-foreground">
+                  {describeInstallProgress(openclawInstallProgress)}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {openclawRuntimeError ? (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">
+              {openclawRuntimeError}
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-background/40 p-3">
+            <div>
+              <p className="text-sm text-muted-foreground">{t('openclawRuntime.restartNote')}</p>
+              <p className="text-xs text-muted-foreground">{t('openclawRuntime.installNote')}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => void loadOpenClawRuntimeStatus(true)}
+                disabled={openclawRuntimeLoading || openclawRuntimeInstalling}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2${openclawRuntimeLoading ? ' animate-spin' : ''}`} />
+                {openclawRuntimeLoading ? t('openclawRuntime.actions.checking') : t('openclawRuntime.actions.check')}
+              </Button>
+              <Button
+                onClick={handleInstallOpenClawUpdate}
+                disabled={
+                  openclawRuntimeInstalling ||
+                  openclawRuntimeLoading ||
+                  !openclawRuntimeStatus?.latestVersion ||
+                  !openclawRuntimeStatus?.updateAvailable
+                }
+              >
+                <Download className={`h-4 w-4 mr-2${openclawRuntimeInstalling ? ' animate-bounce' : ''}`} />
+                {openclawRuntimeInstalling ? t('openclawRuntime.actions.installing') : t('openclawRuntime.actions.install')}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
