@@ -150,6 +150,45 @@
     "errorDetails": "Error Details:",
     "help": "When auto-update is enabled, updates are downloaded and installed automatically."
   },
+  "openclawRuntime": {
+    "title": "OpenClaw Runtime",
+    "description": "Inspect and update the OpenClaw runtime independently from the Clawy shell.",
+    "currentVersion": "Active Runtime Version",
+    "latestVersion": "Latest Available Version",
+    "managedVersion": "Managed Runtime Version",
+    "runtimePath": "Runtime Path",
+    "source": "Runtime Source",
+    "channel": "Update Channel",
+    "plan": "Planned Update Actions",
+    "restartNote": "A successful OpenClaw runtime update restarts the Gateway automatically.",
+    "installNote": "If Clawy is still using a bundled or workspace runtime, installing the update switches Clawy to the managed OpenClaw runtime.",
+    "notInstalled": "Not installed",
+    "unknown": "Unknown",
+    "status": {
+      "upToDate": "Up to date",
+      "updateAvailable": "Update available"
+    },
+    "actions": {
+      "check": "Check OpenClaw Updates",
+      "checking": "Checking...",
+      "install": "Install Latest OpenClaw",
+      "installing": "Installing..."
+    },
+    "phases": {
+      "preparing": "Preparing download...",
+      "downloading": "Downloading package...",
+      "installing": "Installing runtime...",
+      "completed": "Install complete.",
+      "failed": "Install failed."
+    },
+    "toast": {
+      "upToDate": "OpenClaw is already up to date.",
+      "updateAvailable": "OpenClaw {{version}} is available.",
+      "updated": "OpenClaw {{version}} installed and Gateway restarted.",
+      "checkFailed": "Failed to check OpenClaw updates: {{error}}",
+      "installFailed": "Failed to install the OpenClaw update: {{error}}"
+    }
+  },
   "advanced": {
     "title": "Advanced",
     "description": "Power-user options",
