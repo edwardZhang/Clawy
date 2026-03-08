@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": [
+      "../build/openclaw",
+      "../build/openclaw-plugins",
+      "../build/clawhub",
+      "../resources/bin",
+      "../scripts/tauri"
+    ]
+  }
+}

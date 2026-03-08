@@ -27,6 +27,7 @@ const DEFAULT_GATEWAY_SCOPES: [&str; 1] = ["operator.admin"];
 const VISION_MIME_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/bmp", "image/webp"];
 const SUPPORTED_NODE_VERSION_RANGE: &str = ">=24.8.0, <25.0.0";
 const RECOMMENDED_MANAGED_NODE_VERSION: &str = "24.8.0";
+const MANAGED_UV_VERSION: &str = "0.10.0";
 const NODE_SMOKE_TEST_SCRIPT: &str = "process.stdout.write('clawy-node-smoke')";
 const NODE_SMOKE_TEST_OUTPUT: &str = "clawy-node-smoke";
 const FULL_MODE_RUNTIME_FLAG: &str = "CLAWY_FULL_MODE_RUNTIME";
@@ -46,6 +47,9 @@ const MANAGED_RUNTIME_STATE_FILE_NAME: &str = "runtime-state.json";
 const MANAGED_RUNTIME_MANIFEST_FILE_NAME: &str = "manifest.json";
 #[allow(dead_code)]
 const MANAGED_RUNTIME_CURRENT_POINTER_FILE_NAME: &str = "current";
+const MANAGED_UV_DIR_NAME: &str = "uv";
+const MANAGED_UV_CURRENT_DIR_NAME: &str = "current";
+const MANAGED_UV_VERSION_FILE_NAME: &str = "version";
 const OPENCLAW_PACKAGE_NAME: &str = "openclaw";
 const OPENCLAW_NPM_REGISTRY_BASE_URL: &str = "https://registry.npmjs.org";
 
@@ -341,6 +345,10 @@ impl ManagedRuntimeState {
     fn set_current_version(&mut self, kind: ManagedRuntimeKind, version: impl Into<String>) {
         let pointer = self.track_version(kind, version);
         self.registry_mut(kind).current = Some(pointer);
+    }
+
+    fn clear_current_version(&mut self, kind: ManagedRuntimeKind) {
+        self.registry_mut(kind).current = None;
     }
 }
 
@@ -1137,6 +1145,32 @@ fn managed_runtime_manifest_relative_path(kind: ManagedRuntimeKind, version: &st
     managed_runtime_version_relative_dir(kind, version).join(MANAGED_RUNTIME_MANIFEST_FILE_NAME)
 }
 
+fn managed_uv_dir_from_base(base_dir: &Path) -> PathBuf {
+    managed_runtime_root_dir_from_base(base_dir).join(MANAGED_UV_DIR_NAME)
+}
+
+fn managed_uv_current_dir_from_base(base_dir: &Path) -> PathBuf {
+    managed_uv_dir_from_base(base_dir).join(MANAGED_UV_CURRENT_DIR_NAME)
+}
+
+fn managed_uv_staging_dir_from_base(base_dir: &Path) -> PathBuf {
+    managed_uv_dir_from_base(base_dir).join(MANAGED_RUNTIME_STAGING_DIR_NAME)
+}
+
+fn managed_uv_binary_name() -> &'static str {
+    if cfg!(windows) { "uv.exe" } else { "uv" }
+}
+
+fn managed_uv_binary_path_from_base(base_dir: &Path) -> PathBuf {
+    managed_uv_current_dir_from_base(base_dir)
+        .join(uv_target_dir_name())
+        .join(managed_uv_binary_name())
+}
+
+fn managed_uv_version_path_from_base(base_dir: &Path) -> PathBuf {
+    managed_uv_dir_from_base(base_dir).join(MANAGED_UV_VERSION_FILE_NAME)
+}
+
 fn clawy_base_dir() -> PathBuf {
     clawy_base_dir_from_home(&dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
@@ -1625,6 +1659,70 @@ fn managed_openclaw_dir_from_base(base_dir: &Path) -> Option<PathBuf> {
 
 fn managed_openclaw_dir() -> Option<PathBuf> {
     managed_openclaw_dir_from_base(&clawy_base_dir())
+}
+
+fn cleanup_directory_contents(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(path).map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        remove_path_if_exists(&entry.path())?;
+    }
+
+    Ok(())
+}
+
+fn cleanup_managed_runtime_staging_in_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+) -> Result<(), String> {
+    let staging_dir = managed_runtime_staging_dir_from_base(base_dir, kind);
+    ensure_dir(&staging_dir)?;
+    cleanup_directory_contents(&staging_dir)
+}
+
+fn restore_managed_runtime_selection_in_base(
+    base_dir: &Path,
+    kind: ManagedRuntimeKind,
+    previous_version: Option<&str>,
+) -> Result<(), String> {
+    if let Some(version) = previous_version.filter(|value| !value.trim().is_empty()) {
+        return activate_managed_runtime_version_in_base(base_dir, kind, version).map(|_| ());
+    }
+
+    let mut state = load_or_create_managed_runtime_state_in_base(base_dir)?;
+    state.clear_current_version(kind);
+    save_managed_runtime_state_to_base(base_dir, &state)?;
+    remove_path_if_exists(&managed_runtime_current_pointer_path_from_base(base_dir, kind))
+}
+
+fn find_first_file_named(root: &Path, file_name: &str) -> Option<PathBuf> {
+    if !root.exists() {
+        return None;
+    }
+
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        if path.file_name().and_then(|value| value.to_str()) == Some(file_name) && path.is_file() {
+            return Some(path);
+        }
+
+        let Ok(entries) = fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                stack.push(entry_path);
+            } else if entry_path.file_name().and_then(|value| value.to_str()) == Some(file_name) {
+                return Some(entry_path);
+            }
+        }
+    }
+
+    None
 }
 
 fn emit_runtime_install_progress(
@@ -2192,6 +2290,10 @@ fn install_managed_node_archive_in_base(
         return Err("Managed Node version is required".into());
     }
 
+    cleanup_managed_runtime_staging_in_base(base_dir, ManagedRuntimeKind::Node)?;
+    let previous_version =
+        managed_runtime_current_version_from_base(base_dir, ManagedRuntimeKind::Node);
+
     let runtime_dir =
         managed_runtime_version_dir_from_base(base_dir, ManagedRuntimeKind::Node, trimmed_version);
     if runtime_dir.exists() {
@@ -2258,7 +2360,19 @@ fn install_managed_node_archive_in_base(
         }
     }
 
-    activate_managed_runtime_version_in_base(base_dir, ManagedRuntimeKind::Node, trimmed_version)?;
+    if let Err(err) =
+        activate_managed_runtime_version_in_base(base_dir, ManagedRuntimeKind::Node, trimmed_version)
+    {
+        let _ = remove_path_if_exists(&runtime_dir);
+        restore_managed_runtime_selection_in_base(
+            base_dir,
+            ManagedRuntimeKind::Node,
+            previous_version.as_deref(),
+        )?;
+        return Err(format!(
+            "Managed Node {trimmed_version} activation failed after install: {err}"
+        ));
+    }
 
     Ok(ManagedNodeInstallResult {
         version: trimmed_version.to_string(),
@@ -2389,6 +2503,10 @@ fn install_managed_openclaw_archive_in_base(
         return Err("Managed OpenClaw version is required".into());
     }
 
+    cleanup_managed_runtime_staging_in_base(base_dir, ManagedRuntimeKind::OpenClaw)?;
+    let previous_version =
+        managed_runtime_current_version_from_base(base_dir, ManagedRuntimeKind::OpenClaw);
+
     let runtime_dir = managed_runtime_version_dir_from_base(
         base_dir,
         ManagedRuntimeKind::OpenClaw,
@@ -2458,11 +2576,21 @@ fn install_managed_openclaw_archive_in_base(
         }
     }
 
-    activate_managed_runtime_version_in_base(
+    if let Err(err) = activate_managed_runtime_version_in_base(
         base_dir,
         ManagedRuntimeKind::OpenClaw,
         trimmed_version,
-    )?;
+    ) {
+        let _ = remove_path_if_exists(&runtime_dir);
+        restore_managed_runtime_selection_in_base(
+            base_dir,
+            ManagedRuntimeKind::OpenClaw,
+            previous_version.as_deref(),
+        )?;
+        return Err(format!(
+            "Managed OpenClaw {trimmed_version} activation failed after install: {err}"
+        ));
+    }
 
     Ok(ManagedOpenClawInstallResult {
         version: trimmed_version.to_string(),
@@ -5471,7 +5599,100 @@ fn find_command_path(command: &str) -> Option<PathBuf> {
     None
 }
 
+fn managed_uv_download_target() -> Result<(&'static str, &'static str), String> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Ok(("uv-aarch64-apple-darwin.tar.gz", "uv")),
+        ("macos", "x86_64") => Ok(("uv-x86_64-apple-darwin.tar.gz", "uv")),
+        ("windows", "aarch64") => Ok(("uv-aarch64-pc-windows-msvc.zip", "uv.exe")),
+        ("windows", "x86_64") => Ok(("uv-x86_64-pc-windows-msvc.zip", "uv.exe")),
+        ("linux", "aarch64") => Ok(("uv-aarch64-unknown-linux-gnu.tar.gz", "uv")),
+        ("linux", "x86_64") => Ok(("uv-x86_64-unknown-linux-gnu.tar.gz", "uv")),
+        (os, arch) => Err(format!("Managed uv is not supported on `{os}-{arch}`")),
+    }
+}
+
+fn install_managed_uv_binary_in_base(base_dir: &Path) -> Result<PathBuf, String> {
+    let managed_binary = managed_uv_binary_path_from_base(base_dir);
+    if managed_binary.exists() {
+        ensure_unix_executable(&managed_binary)?;
+        return Ok(managed_binary);
+    }
+
+    let (archive_name, binary_name) = managed_uv_download_target()?;
+    let archive_url = format!(
+        "https://github.com/astral-sh/uv/releases/download/{MANAGED_UV_VERSION}/{archive_name}"
+    );
+    let downloads_dir = managed_runtime_downloads_dir_from_base(base_dir);
+    ensure_dir(&downloads_dir)?;
+
+    let destination = downloads_dir.join(archive_name);
+    if !destination.exists() {
+        let temp_path = downloads_dir.join(format!(".{archive_name}.{}", Uuid::new_v4().simple()));
+        let client = reqwest_client_with_timeout(Duration::from_secs(300))?;
+        let response = client
+            .get(&archive_url)
+            .send()
+            .map_err(|err| format!("Failed to download managed uv: {err}"))?
+            .error_for_status()
+            .map_err(|err| format!("Managed uv download failed: {err}"))?;
+        if let Err(err) = download_http_response_to_file(response, &temp_path, None) {
+            let _ = remove_path_if_exists(&temp_path);
+            return Err(err);
+        }
+        if destination.exists() {
+            remove_path_if_exists(&destination)?;
+        }
+        fs::rename(&temp_path, &destination).map_err(|err| err.to_string())?;
+    }
+
+    let staging_dir =
+        managed_uv_staging_dir_from_base(base_dir).join(format!("{}", Uuid::new_v4().simple()));
+    ensure_dir(&staging_dir)?;
+    let current_dir = managed_uv_current_dir_from_base(base_dir);
+    let temp_current_dir = managed_uv_dir_from_base(base_dir)
+        .join(format!("{MANAGED_UV_CURRENT_DIR_NAME}.{}", Uuid::new_v4().simple()));
+
+    let install_result = (|| -> Result<PathBuf, String> {
+        extract_archive_to_dir(&destination, &staging_dir)?;
+        collapse_single_extracted_root_directory(&staging_dir)?;
+
+        let staged_binary = find_first_file_named(&staging_dir, binary_name).ok_or_else(|| {
+            format!(
+                "Managed uv archive did not contain `{binary_name}` under {}",
+                staging_dir.to_string_lossy()
+            )
+        })?;
+
+        ensure_dir(&temp_current_dir.join(uv_target_dir_name()))?;
+        let target_binary = temp_current_dir.join(uv_target_dir_name()).join(binary_name);
+        fs::rename(&staged_binary, &target_binary).map_err(|err| err.to_string())?;
+        ensure_unix_executable(&target_binary)?;
+
+        if current_dir.exists() {
+            remove_path_if_exists(&current_dir)?;
+        }
+        fs::rename(&temp_current_dir, &current_dir).map_err(|err| err.to_string())?;
+        write_text_atomically(
+            &managed_uv_version_path_from_base(base_dir),
+            &format!("{MANAGED_UV_VERSION}\n"),
+        )?;
+
+        Ok(current_dir.join(uv_target_dir_name()).join(binary_name))
+    })();
+
+    let _ = remove_path_if_exists(&staging_dir);
+    if install_result.is_err() {
+        let _ = remove_path_if_exists(&temp_current_dir);
+    }
+
+    install_result
+}
+
 fn resolve_uv_binary() -> (PathBuf, &'static str) {
+    let managed = managed_uv_binary_path_from_base(&clawy_base_dir());
+    if managed.exists() {
+        return (managed, "managed");
+    }
     let bundled = bundled_uv_path();
     if bundled.exists() {
         return (bundled, "bundled");
@@ -5723,15 +5944,23 @@ fn should_optimize_network() -> bool {
 }
 
 fn uv_install_all() -> Result<Value, String> {
-    let (uv_binary, source) = resolve_uv_binary();
+    let (mut uv_binary, mut source) = resolve_uv_binary();
     if source == "missing" || (!uv_binary.exists() && uv_binary != PathBuf::from("uv")) {
-        return Ok(json!({
-            "success": false,
-            "error": format!(
-                "uv not found in system PATH and bundled binary missing at {}",
-                uv_binary.to_string_lossy()
-            ),
-        }));
+        match install_managed_uv_binary_in_base(&clawy_base_dir()) {
+            Ok(path) => {
+                uv_binary = path;
+                source = "managed";
+            }
+            Err(err) => {
+                return Ok(json!({
+                    "success": false,
+                    "error": format!(
+                        "uv not found in system PATH, managed install failed, and bundled binary missing at {}: {err}",
+                        uv_binary.to_string_lossy()
+                    ),
+                }));
+            }
+        }
     }
 
     let mut command = Command::new(&uv_binary);
@@ -8714,11 +8943,20 @@ mod tests {
         path
     }
 
-    fn create_fake_node_archive(base_dir: &Path, version: &str, archive_name: &str) -> PathBuf {
+    fn create_fake_node_archive_with_options(
+        base_dir: &Path,
+        version: &str,
+        archive_name: &str,
+        include_binary: bool,
+        smoke_ok: bool,
+    ) -> PathBuf {
         let archive_path = base_dir.join(archive_name);
         let root_dir = format!("node-v{version}-test/");
-        let archived_binary = create_fake_node_binary(base_dir, "archived-node", version, true);
-        let archived_bytes = fs::read(&archived_binary).expect("read archived node bytes");
+        let archived_binary = include_binary
+            .then(|| create_fake_node_binary(base_dir, "archived-node", version, smoke_ok));
+        let archived_bytes = archived_binary
+            .as_ref()
+            .map(|path| fs::read(path).expect("read archived node bytes"));
 
         let file = File::create(&archive_path).expect("create fake node archive");
         let mut archive = zip::ZipWriter::new(file);
@@ -8734,18 +8972,24 @@ mod tests {
                 .add_directory(format!("{root_dir}bin/"), options)
                 .expect("add bin directory");
         }
-        archive
-            .start_file(
-                format!("{root_dir}{}", managed_node_binary_relative_path()),
-                options,
-            )
-            .expect("start archived node file");
-        archive
-            .write_all(&archived_bytes)
-            .expect("write archived node bytes");
+        if let Some(archived_bytes) = archived_bytes {
+            archive
+                .start_file(
+                    format!("{root_dir}{}", managed_node_binary_relative_path()),
+                    options,
+                )
+                .expect("start archived node file");
+            archive
+                .write_all(&archived_bytes)
+                .expect("write archived node bytes");
+        }
         archive.finish().expect("finish archive");
 
         archive_path
+    }
+
+    fn create_fake_node_archive(base_dir: &Path, version: &str, archive_name: &str) -> PathBuf {
+        create_fake_node_archive_with_options(base_dir, version, archive_name, true, true)
     }
 
     fn create_fake_openclaw_archive_with_options(
@@ -9008,7 +9252,12 @@ mod tests {
         };
 
         let downloaded =
-            download_managed_node_archive_with_client_in_base(test_dir.path(), &client, &payload)
+            download_managed_node_archive_with_client_in_base(
+                test_dir.path(),
+                &client,
+                &payload,
+                None,
+            )
                 .expect("download managed node archive");
 
         assert_eq!(
@@ -9040,7 +9289,12 @@ mod tests {
         };
 
         let error =
-            download_managed_node_archive_with_client_in_base(test_dir.path(), &client, &payload)
+            download_managed_node_archive_with_client_in_base(
+                test_dir.path(),
+                &client,
+                &payload,
+                None,
+            )
                 .expect_err("checksum mismatch should fail");
 
         assert!(error.contains("checksum mismatch"));
@@ -9093,6 +9347,52 @@ mod tests {
             .count(),
             0
         );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn managed_node_install_failure_does_not_replace_working_runtime() {
+        let test_dir = TestDir::new("managed-node-install-failure");
+        let working_archive =
+            create_fake_node_archive(test_dir.path(), "24.8.0", "node-v24.8.0-test.zip");
+        let broken_archive = create_fake_node_archive_with_options(
+            test_dir.path(),
+            "24.8.1",
+            "node-v24.8.1-test.zip",
+            false,
+            true,
+        );
+
+        install_managed_node_archive_in_base(test_dir.path(), "24.8.0", &working_archive)
+            .expect("install working managed node");
+        let error = install_managed_node_archive_in_base(test_dir.path(), "24.8.1", &broken_archive)
+            .expect_err("broken managed node archive should fail");
+
+        assert!(error.contains("Managed Node archive did not produce"));
+        assert_eq!(
+            fs::read_to_string(managed_runtime_current_pointer_path_from_base(
+                test_dir.path(),
+                ManagedRuntimeKind::Node,
+            ))
+            .expect("read current pointer")
+            .trim(),
+            "24.8.0"
+        );
+        assert_eq!(
+            fs::read_dir(managed_runtime_staging_dir_from_base(
+                test_dir.path(),
+                ManagedRuntimeKind::Node,
+            ))
+            .expect("read node staging dir")
+            .count(),
+            0
+        );
+        assert!(!managed_runtime_version_dir_from_base(
+            test_dir.path(),
+            ManagedRuntimeKind::Node,
+            "24.8.1",
+        )
+        .exists());
     }
 
     #[cfg(not(windows))]
@@ -9212,6 +9512,7 @@ mod tests {
             &client,
             version,
             &registry_url,
+            None,
         )
         .expect("download managed openclaw archive");
 
@@ -9331,6 +9632,15 @@ mod tests {
             broken_version,
         )
         .exists());
+        assert_eq!(
+            fs::read_dir(managed_runtime_staging_dir_from_base(
+                test_dir.path(),
+                ManagedRuntimeKind::OpenClaw,
+            ))
+            .expect("read openclaw staging dir")
+            .count(),
+            0
+        );
     }
 
     #[test]
