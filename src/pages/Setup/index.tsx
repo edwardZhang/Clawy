@@ -101,11 +101,15 @@ const defaultSkills: DefaultSkill[] = [
 ];
 
 import {
+  defaultAuthModeForProvider,
   SETUP_PROVIDERS,
+  isProviderAuthModeAvailable,
+  resolveProviderTypeForAuth,
   type ProviderTypeInfo,
   getProviderIconUrl,
   resolveProviderApiKeyForSave,
   resolveProviderModelForSave,
+  shouldHideProviderTypeInPicker,
   shouldInvertInDark,
   shouldShowProviderModelId,
 } from '@/lib/providers';
@@ -1289,6 +1293,7 @@ function ProviderContent({
   const [baseUrl, setBaseUrl] = useState('');
   const [modelId, setModelId] = useState('');
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [configuredTypes, setConfiguredTypes] = useState<Set<string>>(new Set());
   const providerMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>('oauth');
@@ -1306,6 +1311,18 @@ function ProviderContent({
   const [oauthPromptInput, setOauthPromptInput] = useState('');
   const [oauthProgressMessage, setOauthProgressMessage] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
+  const effectiveSelectedProviderType = selectedProvider
+    ? resolveProviderTypeForAuth(selectedProvider, authMode)
+    : null;
+  const availableProviders = providers.filter((provider) => {
+    if (shouldHideProviderTypeInPicker(provider.id)) {
+      return false;
+    }
+    if (provider.id === 'openai') {
+      return !(configuredTypes.has('openai') && configuredTypes.has('openai-codex'));
+    }
+    return provider.id === 'custom' || !configuredTypes.has(provider.id);
+  });
 
   // Manage OAuth events
   useEffect(() => {
@@ -1341,9 +1358,11 @@ function ProviderContent({
       setOauthProgressMessage(null);
       setKeyValid(true);
 
-      if (selectedProvider) {
+      if (effectiveSelectedProviderType) {
         try {
-          await desktopApi.ipcRenderer.invoke('provider:setDefault', selectedProvider);
+          await desktopApi.ipcRenderer.invoke('provider:setDefault', effectiveSelectedProviderType);
+          const refreshedList = await desktopApi.ipcRenderer.invoke('provider:list') as Array<{ type: string }>;
+          setConfiguredTypes(new Set(refreshedList.map((item) => item.type)));
         } catch (error) {
           console.error('Failed to set default provider:', error);
         }
@@ -1375,10 +1394,10 @@ function ProviderContent({
         desktopApi.ipcRenderer.off('oauth:error', handleError);
       }
     };
-  }, [onConfiguredChange, t, selectedProvider]);
+  }, [onConfiguredChange, t, effectiveSelectedProviderType]);
 
   const handleStartOAuth = async () => {
-    if (!selectedProvider) return;
+    if (!effectiveSelectedProviderType || !selectedProvider) return;
 
     try {
       const list = await desktopApi.ipcRenderer.invoke('provider:list') as Array<{ type: string }>;
@@ -1389,6 +1408,10 @@ function ProviderContent({
       }
       if (selectedProvider === 'minimax-portal-cn' && existingTypes.has('minimax-portal')) {
         toast.error(t('settings:aiProviders.toast.minimaxConflict'));
+        return;
+      }
+      if (!isProviderAuthModeAvailable(selectedProvider, 'oauth', existingTypes)) {
+        toast.error(t('settings:aiProviders.toast.failedAdd'));
         return;
       }
     } catch {
@@ -1403,7 +1426,7 @@ function ProviderContent({
     setOauthError(null);
 
     try {
-      await desktopApi.ipcRenderer.invoke('provider:requestOAuth', selectedProvider);
+      await desktopApi.ipcRenderer.invoke('provider:requestOAuth', effectiveSelectedProviderType);
     } catch (e) {
       setOauthError(String(e));
       setOauthFlowing(false);
@@ -1439,18 +1462,24 @@ function ProviderContent({
       try {
         const list = await desktopApi.ipcRenderer.invoke('provider:list') as Array<{ id: string; type: string; hasKey: boolean }>;
         const defaultId = await desktopApi.ipcRenderer.invoke('provider:getDefault') as string | null;
+        const nextConfiguredTypes = new Set(list.map((item) => item.type));
+        setConfiguredTypes(nextConfiguredTypes);
         const setupProviderTypes = new Set<string>(providers.map((p) => p.id));
-        const setupCandidates = list.filter((p) => setupProviderTypes.has(p.type));
+        const setupCandidates = list.filter((p) => setupProviderTypes.has(p.type) || p.type === 'openai-codex');
         const preferred =
           (defaultId && setupCandidates.find((p) => p.id === defaultId))
           || setupCandidates.find((p) => p.hasKey)
           || setupCandidates[0];
         if (preferred && !cancelled) {
-          onSelectProvider(preferred.type);
+          const visibleType = preferred.type === 'openai-codex' ? 'openai' : preferred.type;
+          onSelectProvider(visibleType);
+          setAuthMode(defaultAuthModeForProvider(visibleType, nextConfiguredTypes, providers.find((p) => p.id === visibleType)));
           setSelectedProviderConfigId(preferred.id);
-          const typeInfo = providers.find((p) => p.id === preferred.type);
-          const requiresKey = typeInfo?.requiresApiKey ?? false;
-          onConfiguredChange(!requiresKey || preferred.hasKey);
+          const typeInfo = providers.find((p) => p.id === visibleType);
+          const providerRequiresKey = visibleType === 'openai'
+            ? preferred.type === 'openai'
+            : (typeInfo?.requiresApiKey ?? false);
+          onConfiguredChange(!providerRequiresKey || preferred.hasKey || preferred.type === 'openai-codex');
           const storedKey = await desktopApi.ipcRenderer.invoke('provider:getApiKey', preferred.id) as string | null;
           if (storedKey) {
             onApiKeyChange(storedKey);
@@ -1471,16 +1500,17 @@ function ProviderContent({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!selectedProvider) return;
+      if (!effectiveSelectedProviderType || !selectedProvider) return;
       try {
         const list = await desktopApi.ipcRenderer.invoke('provider:list') as Array<{ id: string; type: string; hasKey: boolean }>;
         const defaultId = await desktopApi.ipcRenderer.invoke('provider:getDefault') as string | null;
-        const sameType = list.filter((p) => p.type === selectedProvider);
+        setConfiguredTypes(new Set(list.map((item) => item.type)));
+        const sameType = list.filter((p) => p.type === effectiveSelectedProviderType);
         const preferredInstance =
           (defaultId && sameType.find((p) => p.id === defaultId))
           || sameType.find((p) => p.hasKey)
           || sameType[0];
-        const providerIdForLoad = preferredInstance?.id || selectedProvider;
+        const providerIdForLoad = preferredInstance?.id || effectiveSelectedProviderType;
         setSelectedProviderConfigId(providerIdForLoad);
 
         const savedProvider = await desktopApi.ipcRenderer.invoke(
@@ -1504,7 +1534,7 @@ function ProviderContent({
       }
     })();
     return () => { cancelled = true; };
-  }, [onApiKeyChange, selectedProvider, providers]);
+  }, [effectiveSelectedProviderType, onApiKeyChange, selectedProvider, providers]);
 
   useEffect(() => {
     if (!providerMenuOpen) return;
@@ -1538,6 +1568,12 @@ function ProviderContent({
   const requiresKey = selectedProviderData?.requiresApiKey ?? false;
   const isOAuth = selectedProviderData?.isOAuth ?? false;
   const supportsApiKey = selectedProviderData?.supportsApiKey ?? false;
+  const oauthModeAvailable = selectedProvider
+    ? isProviderAuthModeAvailable(selectedProvider, 'oauth', configuredTypes)
+    : false;
+  const apiKeyModeAvailable = selectedProvider
+    ? isProviderAuthModeAvailable(selectedProvider, 'apikey', configuredTypes)
+    : false;
   const useOAuthFlow = isOAuth && (!supportsApiKey || authMode === 'oauth');
 
   const handleValidateAndSave = async () => {
@@ -1552,6 +1588,10 @@ function ProviderContent({
       }
       if (selectedProvider === 'minimax-portal-cn' && existingTypes.has('minimax-portal')) {
         toast.error(t('settings:aiProviders.toast.minimaxConflict'));
+        return;
+      }
+      if (selectedProvider === 'openai' && !apiKeyModeAvailable) {
+        toast.error(t('settings:aiProviders.toast.failedAdd'));
         return;
       }
     } catch {
@@ -1594,7 +1634,7 @@ function ProviderContent({
           ? (selectedProviderConfigId?.startsWith('custom-')
             ? selectedProviderConfigId
             : `custom-${crypto.randomUUID()}`)
-          : selectedProvider;
+          : (effectiveSelectedProviderType || selectedProvider);
 
       const effectiveApiKey = resolveProviderApiKeyForSave(selectedProvider, apiKey);
 
@@ -1604,7 +1644,7 @@ function ProviderContent({
         {
           id: providerIdForSave,
           name: selectedProvider === 'custom' ? t('settings:aiProviders.custom') : (selectedProviderData?.name || selectedProvider),
-          type: selectedProvider,
+          type: providerIdForSave,
           baseUrl: baseUrl.trim() || undefined,
           model: effectiveModelId,
           enabled: true,
@@ -1628,6 +1668,7 @@ function ProviderContent({
       }
 
       setSelectedProviderConfigId(providerIdForSave);
+      setConfiguredTypes((previous) => new Set(previous).add(providerIdForSave));
       onConfiguredChange(true);
       toast.success(t('provider.valid'));
     } catch (error) {
@@ -1654,7 +1695,7 @@ function ProviderContent({
     onApiKeyChange('');
     setKeyValid(null);
     setProviderMenuOpen(false);
-    setAuthMode('oauth');
+    setAuthMode(defaultAuthModeForProvider(providerId, configuredTypes, providers.find((provider) => provider.id === providerId)));
   };
 
   return (
@@ -1702,7 +1743,7 @@ function ProviderContent({
               role="listbox"
               className="absolute z-20 mt-1 w-full rounded-md border border-border bg-popover shadow-md max-h-64 overflow-auto"
             >
-              {providers.map((p) => {
+              {availableProviders.map((p) => {
                 const iconUrl = getProviderIconUrl(p.id);
                 const isSelected = selectedProvider === p.id;
 
@@ -1793,19 +1834,25 @@ function ProviderContent({
           {isOAuth && supportsApiKey && (
             <div className="flex rounded-lg border overflow-hidden text-sm">
               <button
-                onClick={() => setAuthMode('oauth')}
+                onClick={() => oauthModeAvailable && setAuthMode('oauth')}
+                disabled={!oauthModeAvailable}
                 className={cn(
                   'flex-1 py-2 px-3 transition-colors',
-                  authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
+                  authMode === 'oauth' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
+                  !oauthModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
                 )}
               >
-                {t('settings:aiProviders.oauth.loginMode')}
+                {selectedProvider === 'openai'
+                  ? t('settings:aiProviders.oauth.codexMode')
+                  : t('settings:aiProviders.oauth.loginMode')}
               </button>
               <button
-                onClick={() => setAuthMode('apikey')}
+                onClick={() => apiKeyModeAvailable && setAuthMode('apikey')}
+                disabled={!apiKeyModeAvailable}
                 className={cn(
                   'flex-1 py-2 px-3 transition-colors',
-                  authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
+                  authMode === 'apikey' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground',
+                  !apiKeyModeAvailable && 'cursor-not-allowed opacity-50 hover:bg-transparent'
                 )}
               >
                 {t('settings:aiProviders.oauth.apikeyMode')}
@@ -1847,7 +1894,9 @@ function ProviderContent({
             <div className="space-y-4 pt-2">
               <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-4 text-center">
                 <p className="text-sm text-blue-200 mb-3 block">
-                  This provider requires signing in via your browser.
+                  {selectedProvider === 'openai'
+                    ? t('settings:aiProviders.oauth.codexPrompt')
+                    : t('settings:aiProviders.oauth.loginPrompt')}
                 </p>
                 <Button
                   onClick={handleStartOAuth}

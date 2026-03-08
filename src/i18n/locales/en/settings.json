@@ -75,8 +75,10 @@
     },
     "oauth": {
       "loginMode": "OAuth Login",
+      "codexMode": "Codex OAuth",
       "apikeyMode": "API Key",
       "loginPrompt": "This provider requires signing in via your browser.",
+      "codexPrompt": "Sign in with your OpenAI account to enable Codex OAuth.",
       "loginButton": "Login with Browser",
       "getApiKey": "Get API Key",
       "waiting": "Waiting...",

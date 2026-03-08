@@ -75,8 +75,10 @@
     },
     "oauth": {
       "loginMode": "OAuth 登录",
+      "codexMode": "Codex OAuth",
       "apikeyMode": "API 密钥",
       "loginPrompt": "此提供商需要通过浏览器登录授权。",
+      "codexPrompt": "使用你的 OpenAI 账号登录，以启用 Codex OAuth。",
       "loginButton": "浏览器登录",
       "getApiKey": "获取 API 密钥",
       "waiting": "等待中...",

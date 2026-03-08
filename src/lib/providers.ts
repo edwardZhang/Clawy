@@ -21,6 +21,7 @@ export const PROVIDER_TYPES = [
   'custom',
 ] as const;
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
+export type ProviderAuthMode = 'oauth' | 'apikey';
 
 export const OLLAMA_PLACEHOLDER_API_KEY = 'ollama-local';
 
@@ -75,7 +76,7 @@ import { providerIcons } from '@/assets/providers';
 /** All supported provider types with UI metadata */
 export const PROVIDER_TYPE_INFO: ProviderTypeInfo[] = [
   { id: 'anthropic', name: 'Anthropic', icon: '🤖', placeholder: 'sk-ant-api03-...', model: 'Claude', requiresApiKey: true },
-  { id: 'openai', name: 'OpenAI', icon: '💚', placeholder: 'sk-proj-...', model: 'GPT', requiresApiKey: true },
+  { id: 'openai', name: 'OpenAI', icon: '💚', placeholder: 'sk-proj-...', model: 'GPT', requiresApiKey: true, isOAuth: true, supportsApiKey: true },
   { id: 'openai-codex', name: 'Codex', icon: '💚', placeholder: 'Browser login required', model: 'GPT-5.3 Codex', requiresApiKey: false, isOAuth: true, defaultModelId: 'gpt-5.3-codex' },
   { id: 'google', name: 'Google', icon: '🔷', placeholder: 'AIza...', model: 'Gemini', requiresApiKey: true },
   { id: 'openrouter', name: 'OpenRouter', icon: '🌐', placeholder: 'sk-or-v1-...', model: 'Multi-Model', requiresApiKey: true, showModelId: true, showModelIdInDevModeOnly: true, modelIdPlaceholder: 'anthropic/claude-opus-4.6', defaultModelId: 'anthropic/claude-opus-4.6' },
@@ -136,4 +137,49 @@ export function resolveProviderApiKeyForSave(type: ProviderType | string, apiKey
     return trimmed || OLLAMA_PLACEHOLDER_API_KEY;
   }
   return trimmed || undefined;
+}
+
+export function resolveProviderTypeForAuth(
+  type: ProviderType | string,
+  authMode: ProviderAuthMode
+): string {
+  if (type === 'openai' && authMode === 'oauth') {
+    return 'openai-codex';
+  }
+  return type;
+}
+
+export function defaultAuthModeForProvider(
+  type: ProviderType | string,
+  existingTypes: Set<string>,
+  provider?: Pick<ProviderTypeInfo, 'isOAuth'>
+): ProviderAuthMode {
+  if (type === 'openai') {
+    if (existingTypes.has('openai') && !existingTypes.has('openai-codex')) {
+      return 'oauth';
+    }
+    return 'apikey';
+  }
+
+  return provider?.isOAuth ? 'oauth' : 'apikey';
+}
+
+export function isProviderAuthModeAvailable(
+  type: ProviderType | string,
+  authMode: ProviderAuthMode,
+  existingTypes: Set<string>
+): boolean {
+  if (type !== 'openai') {
+    return true;
+  }
+
+  if (authMode === 'oauth') {
+    return !existingTypes.has('openai-codex');
+  }
+
+  return !existingTypes.has('openai');
+}
+
+export function shouldHideProviderTypeInPicker(type: ProviderType | string): boolean {
+  return type === 'openai-codex';
 }
