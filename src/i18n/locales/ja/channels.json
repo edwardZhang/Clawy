@@ -217,13 +217,65 @@
                 "accessToken": {
                     "label": "アクセストークン",
                     "placeholder": "アクセストークン"
+                },
+                "encryption": {
+                    "label": "エンドツーエンド暗号化",
+                    "description": "暗号化された Matrix ルームを有効にします。Beeper や暗号化ルームで必要です。"
+                },
+                "dmPolicy": {
+                    "label": "DM ポリシー",
+                    "description": "誰がボットに DM を送れるかを決めます。既定値はペアリング承認です。"
+                },
+                "dmAllowFrom": {
+                    "label": "DM 許可リスト",
+                    "placeholder": "@admin:example.org",
+                    "description": "1 行に 1 つ、完全な Matrix ユーザー ID を入力します。公開 DM と組み合わせる場合は * を使えます。"
+                },
+                "groupPolicy": {
+                    "label": "ルームポリシー",
+                    "description": "ボットが許可リストのルームだけで応答するか、任意のルームで応答するか、ルームを無効にするかを選びます。"
+                },
+                "groups": {
+                    "label": "許可されたルーム",
+                    "placeholder": "!roomId:example.org\n#alias:example.org",
+                    "description": "1 行に 1 つ、ルーム ID またはルームエイリアスを入力します。ルームポリシーが許可リストの場合に使います。"
+                },
+                "groupAllowFrom": {
+                    "label": "ルーム内で許可する送信者",
+                    "placeholder": "@owner:example.org",
+                    "description": "任意。ルーム内でボットをトリガーできる完全な Matrix ユーザー ID を 1 行ずつ入力します。"
+                },
+                "roomReplyMode": {
+                    "label": "ルーム返信モード",
+                    "description": "メンション必須の方が安全です。自動返信にすると、許可されたルーム内の各メッセージに応答できます。"
                 }
             },
             "instructions": [
                 "Matrix アカウントを作成するか、既存のものを使用します",
                 "クライアントからアクセストークンを取得します",
-                "以下にホームサーバーとトークンを入力します"
+                "DM とルームのポリシーを設定して、期待どおりにボットが応答するようにします"
             ],
+            "options": {
+                "boolean": {
+                    "disabled": "無効",
+                    "enabled": "有効"
+                },
+                "dmPolicy": {
+                    "pairing": "ペアリング承認が必要",
+                    "allowlist": "許可リストのユーザーのみ",
+                    "open": "誰でも DM 可能",
+                    "disabled": "すべての DM を無効化"
+                },
+                "groupPolicy": {
+                    "allowlist": "許可リストのルームのみ",
+                    "open": "任意のルーム",
+                    "disabled": "すべてのルームを無効化"
+                },
+                "roomReplyMode": {
+                    "mentionOnly": "メンション時のみ返信",
+                    "autoReply": "ルームで自動返信"
+                }
+            },
             "docsUrl": "https://docs.openclaw.ai/channels/matrix"
         },
         "line": {

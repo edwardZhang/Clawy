@@ -218,12 +218,64 @@
                 "accessToken": {
                     "label": "Access Token",
                     "placeholder": "Your access token"
+                },
+                "encryption": {
+                    "label": "End-to-end encryption",
+                    "description": "Enable encrypted Matrix rooms. Required for Beeper and encrypted rooms."
+                },
+                "dmPolicy": {
+                    "label": "Direct message policy",
+                    "description": "Choose who can start a DM with the bot. Default is pairing."
+                },
+                "dmAllowFrom": {
+                    "label": "DM allowlist",
+                    "placeholder": "@admin:example.org",
+                    "description": "One full Matrix user ID per line. Use * with Open policy to allow everyone."
+                },
+                "groupPolicy": {
+                    "label": "Room policy",
+                    "description": "Choose whether the bot answers in rooms only from an allowlist, in any room, or never."
+                },
+                "groups": {
+                    "label": "Allowed rooms",
+                    "placeholder": "!roomId:example.org\n#alias:example.org",
+                    "description": "One room ID or alias per line. Used when Room policy is Allowlist."
+                },
+                "groupAllowFrom": {
+                    "label": "Allowed room senders",
+                    "placeholder": "@owner:example.org",
+                    "description": "Optional full Matrix user IDs allowed to trigger the bot inside rooms."
+                },
+                "roomReplyMode": {
+                    "label": "Room reply mode",
+                    "description": "Mention only is safer. Auto reply lets the bot answer every allowed room message."
+                }
+            },
+            "options": {
+                "boolean": {
+                    "disabled": "Disabled",
+                    "enabled": "Enabled"
+                },
+                "dmPolicy": {
+                    "pairing": "Pairing approval required",
+                    "allowlist": "Only allowlisted users",
+                    "open": "Anyone can DM the bot",
+                    "disabled": "Disable all DMs"
+                },
+                "groupPolicy": {
+                    "allowlist": "Only allowlisted rooms",
+                    "open": "Any room",
+                    "disabled": "Disable all rooms"
+                },
+                "roomReplyMode": {
+                    "mentionOnly": "Require mention",
+                    "autoReply": "Auto reply in room"
                 }
             },
             "instructions": [
                 "Create a Matrix account or use existing",
                 "Get an access token from your client",
-                "Enter the homeserver and token below"
+                "Choose DM and room policies so the bot can reply where you expect"
             ]
         },
         "line": {
