@@ -113,6 +113,7 @@
             "preparing": "Preparing download...",
             "downloading": "Downloading package...",
             "installing": "Installing runtime...",
+            "verifying": "Verifying runtime...",
             "completed": "Install complete.",
             "failed": "Install failed."
         },

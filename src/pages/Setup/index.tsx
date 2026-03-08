@@ -381,6 +381,10 @@ interface RuntimeStatusPayload {
 interface RuntimeInstallResponse {
   success?: boolean;
   error?: string;
+  started?: boolean;
+  alreadyRunning?: boolean;
+  runtime?: 'nodejs' | 'openclaw';
+  version?: string;
   result?: {
     version?: string;
   };
@@ -388,7 +392,7 @@ interface RuntimeInstallResponse {
 
 interface RuntimeInstallEventPayload {
   runtime?: 'nodejs' | 'openclaw';
-  phase?: 'preparing' | 'downloading' | 'installing' | 'completed' | 'failed';
+  phase?: 'preparing' | 'downloading' | 'installing' | 'verifying' | 'completed' | 'failed';
   status?: 'running' | 'completed' | 'failed';
   percent?: number;
   version?: string;
@@ -922,6 +926,12 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
             progress,
           },
         });
+        if (key === 'nodejs') {
+          toast.success(t('runtime.toast.nodeInstalled', { version: event.version || '' }));
+        } else {
+          toast.success(t('runtime.toast.openclawInstalled', { version: event.version || '' }));
+        }
+        void runChecks();
         return;
       }
 
@@ -942,7 +952,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         unlisten();
       }
     };
-  }, [runtimeInstallMessage]);
+  }, [runChecks, runtimeInstallMessage, t]);
 
   useEffect(() => {
     onStatusChange(allChecksPassed);
@@ -1024,9 +1034,9 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       if (response.success === false) {
         throw new Error(response.error || t('runtime.status.nodeInstallFailed'));
       }
-
-      toast.success(t('runtime.toast.nodeInstalled', { version: response.result?.version || '' }));
-      await runChecks();
+      if (response.started === false && response.alreadyRunning) {
+        toast.info(t('runtime.status.installingNode'));
+      }
     } catch (error) {
       dispatchChecks({
         type: 'set',
@@ -1055,9 +1065,9 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       if (response.success === false) {
         throw new Error(response.error || t('runtime.status.openclawInstallFailed'));
       }
-
-      toast.success(t('runtime.toast.openclawInstalled', { version: response.result?.version || '' }));
-      await runChecks();
+      if (response.started === false && response.alreadyRunning) {
+        toast.info(t('runtime.status.installingOpenClaw'));
+      }
     } catch (error) {
       dispatchChecks({
         type: 'set',

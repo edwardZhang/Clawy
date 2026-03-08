@@ -178,6 +178,7 @@
       "preparing": "正在准备下载...",
       "downloading": "正在下载包...",
       "installing": "正在安装运行时...",
+      "verifying": "正在验证运行时...",
       "completed": "安装完成。",
       "failed": "安装失败。"
     },

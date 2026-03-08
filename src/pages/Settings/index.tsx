@@ -40,7 +40,7 @@ type ControlUiInfo = {
 
 type RuntimeInstallEventPayload = {
   runtime?: 'nodejs' | 'openclaw';
-  phase?: 'preparing' | 'downloading' | 'installing' | 'completed' | 'failed';
+  phase?: 'preparing' | 'downloading' | 'installing' | 'verifying' | 'completed' | 'failed';
   status?: 'running' | 'completed' | 'failed';
   percent?: number;
   version?: string;
@@ -53,6 +53,21 @@ type RuntimeInstallEventPayload = {
   };
 };
 
+type RuntimeInstallResponse = {
+  success?: boolean;
+  error?: string;
+  started?: boolean;
+  alreadyRunning?: boolean;
+  targetVersion?: string;
+};
+
+type OpenClawUpdateStatusRefreshEventPayload = {
+  status?: 'running' | 'completed' | 'failed';
+  mode?: 'summary' | 'full';
+  result?: OpenClawUpdateStatus;
+  error?: string;
+};
+
 type OpenClawUpdateStatus = {
   success?: boolean;
   currentVersion?: string | null;
@@ -60,6 +75,7 @@ type OpenClawUpdateStatus = {
   currentDir?: string | null;
   managedVersion?: string | null;
   latestVersion?: string | null;
+  recommendedVersion?: string | null;
   updateAvailable?: boolean;
   channel?: {
     value?: string;
@@ -163,6 +179,7 @@ export function Settings() {
   const [openclawRuntimeInstalling, setOpenclawRuntimeInstalling] = useState(false);
   const [openclawRuntimeError, setOpenclawRuntimeError] = useState<string | null>(null);
   const [openclawInstallProgress, setOpenclawInstallProgress] = useState<RuntimeInstallEventPayload | null>(null);
+  const [openclawRuntimeRefreshInteractive, setOpenclawRuntimeRefreshInteractive] = useState(false);
 
   const isWindows = desktopApi.platform === 'win32';
   const showCliTools = true;
@@ -191,10 +208,13 @@ export function Settings() {
     }
   };
 
-  const loadOpenClawRuntimeStatus = useCallback(async (showToast = false) => {
+  const loadOpenClawRuntimeStatus = useCallback(async (
+    showToast = false,
+    mode: 'summary' | 'full' = 'summary',
+  ) => {
     setOpenclawRuntimeLoading(true);
     try {
-      const result = await desktopApi.ipcRenderer.invoke('openclaw:getUpdateStatus') as OpenClawUpdateStatus;
+      const result = await desktopApi.ipcRenderer.invoke('openclaw:getUpdateStatus', { mode }) as OpenClawUpdateStatus;
       setOpenclawRuntimeStatus(result);
       setOpenclawRuntimeError(null);
       if (showToast) {
@@ -222,19 +242,40 @@ export function Settings() {
       const payload = openclawRuntimeStatus?.latestVersion
         ? { version: openclawRuntimeStatus.latestVersion }
         : undefined;
-      const result = await desktopApi.ipcRenderer.invoke('openclaw:installUpdate', payload) as {
-        targetVersion?: string;
-      };
-      const version = result?.targetVersion || openclawRuntimeStatus?.latestVersion || '';
-      toast.success(t('openclawRuntime.toast.updated', { version }));
-      await loadOpenClawRuntimeStatus();
+      const result = await desktopApi.ipcRenderer.invoke('openclaw:installUpdate', payload) as RuntimeInstallResponse;
+      if (result.success === false) {
+        throw new Error(result.error || 'OpenClaw update failed');
+      }
+      if (result.started === false && result.alreadyRunning) {
+        toast.info(t('openclawRuntime.actions.installing'));
+      }
     } catch (error) {
       const message = String(error);
       setOpenclawRuntimeError(message);
-      toast.error(t('openclawRuntime.toast.installFailed', { error: message }));
-    } finally {
       setOpenclawRuntimeInstalling(false);
       setOpenclawInstallProgress(null);
+      toast.error(t('openclawRuntime.toast.installFailed', { error: message }));
+    }
+  };
+
+  const handleRefreshOpenClawRuntimeStatus = async () => {
+    setOpenclawRuntimeLoading(true);
+    setOpenclawRuntimeError(null);
+    setOpenclawRuntimeRefreshInteractive(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('openclaw:refreshUpdateStatus', { mode: 'full' }) as RuntimeInstallResponse;
+      if (result.success === false) {
+        throw new Error(result.error || 'OpenClaw update check failed');
+      }
+      if (result.started === false && result.alreadyRunning) {
+        toast.info(t('openclawRuntime.actions.checking'));
+      }
+    } catch (error) {
+      const message = String(error);
+      setOpenclawRuntimeError(message);
+      setOpenclawRuntimeLoading(false);
+      setOpenclawRuntimeRefreshInteractive(false);
+      toast.error(t('openclawRuntime.toast.checkFailed', { error: message }));
     }
   };
 
@@ -336,7 +377,19 @@ export function Settings() {
   }, [loadOpenClawRuntimeStatus]);
 
   useEffect(() => {
-    void loadOpenClawRuntimeStatus();
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
+        if (!cancelled) {
+          void loadOpenClawRuntimeStatus(false, 'summary');
+        }
+      });
+    }, 120);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [loadOpenClawRuntimeStatus]);
 
   useEffect(() => {
@@ -351,15 +404,58 @@ export function Settings() {
       if (event.status === 'failed') {
         setOpenclawRuntimeError(event.error || event.detail || null);
         setOpenclawRuntimeInstalling(false);
+        setOpenclawInstallProgress(null);
       }
 
       if (event.status === 'completed') {
-        void loadOpenClawRuntimeStatus();
+        const version = event.version || openclawRuntimeStatus?.latestVersion || '';
+        toast.success(t('openclawRuntime.toast.updated', { version }));
+        setOpenclawRuntimeInstalling(false);
+        void loadOpenClawRuntimeStatus(false, 'summary').finally(() => {
+          setOpenclawInstallProgress(null);
+        });
       }
     });
 
     return () => { unsubscribe?.(); };
-  }, [loadOpenClawRuntimeStatus]);
+  }, [loadOpenClawRuntimeStatus, openclawRuntimeStatus?.latestVersion, t]);
+
+  useEffect(() => {
+    const unsubscribe = desktopApi.ipcRenderer.on('openclaw:update-status-changed', (payload) => {
+      const event = payload as OpenClawUpdateStatusRefreshEventPayload;
+      if (event.status === 'running') {
+        setOpenclawRuntimeLoading(true);
+        return;
+      }
+
+      if (event.status === 'completed' && event.result) {
+        setOpenclawRuntimeStatus(event.result);
+        setOpenclawRuntimeError(null);
+        setOpenclawRuntimeLoading(false);
+        if (openclawRuntimeRefreshInteractive) {
+          if (event.result.updateAvailable && event.result.latestVersion) {
+            toast.success(t('openclawRuntime.toast.updateAvailable', { version: event.result.latestVersion }));
+          } else {
+            toast.success(t('openclawRuntime.toast.upToDate'));
+          }
+          setOpenclawRuntimeRefreshInteractive(false);
+        }
+        return;
+      }
+
+      if (event.status === 'failed') {
+        const message = event.error || 'OpenClaw update check failed';
+        setOpenclawRuntimeError(message);
+        setOpenclawRuntimeLoading(false);
+        if (openclawRuntimeRefreshInteractive) {
+          toast.error(t('openclawRuntime.toast.checkFailed', { error: message }));
+          setOpenclawRuntimeRefreshInteractive(false);
+        }
+      }
+    });
+
+    return () => { unsubscribe?.(); };
+  }, [openclawRuntimeRefreshInteractive, t]);
 
   useEffect(() => {
     setProxyEnabledDraft(proxyEnabled);
@@ -809,7 +905,7 @@ export function Settings() {
             <div className="flex gap-2">
               <Button
                 variant="outline"
-                onClick={() => void loadOpenClawRuntimeStatus(true)}
+                onClick={() => void handleRefreshOpenClawRuntimeStatus()}
                 disabled={openclawRuntimeLoading || openclawRuntimeInstalling}
               >
                 <RefreshCw className={`h-4 w-4 mr-2${openclawRuntimeLoading ? ' animate-spin' : ''}`} />
