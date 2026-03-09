@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@icons-pack/react-simple-icons':
+        specifier: ^13.12.0
+        version: 13.12.0(react@19.2.4)
       '@tauri-apps/api':
         specifier: ^2.10.1
         version: 2.10.1
@@ -836,6 +839,12 @@ packages:
   '@humanwhocodes/retry@0.4.3':
     resolution: {integrity: sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ==}
     engines: {node: '>=18.18'}
+
+  '@icons-pack/react-simple-icons@13.12.0':
+    resolution: {integrity: sha512-RCtXJw+tTG8fmBieqBJSRA5BItVcXCPN6QOIqIJMmLD7ESLr8nB78JrahheXofy8ZWH+Fpwxou0oElseObu1dw==}
+    engines: {node: '>=24', pnpm: '>=10'}
+    peerDependencies:
+      react: ^16.13 || ^17 || ^18 || ^19
 
   '@img/colour@1.0.0':
     resolution: {integrity: sha512-A5P/LfWGFSl6nsckYtjw9da+19jB8hkJ6ACTGcDfEJ0aE+l2n2El7dsVM7UVHZQ9s2lmYMWlrS21YLy2IR1LUw==}
@@ -6851,6 +6860,10 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
+  '@icons-pack/react-simple-icons@13.12.0(react@19.2.4)':
+    dependencies:
+      react: 19.2.4
+
   '@img/colour@1.0.0': {}
 
   '@img/sharp-darwin-arm64@0.34.5':
@@ -10106,7 +10119,7 @@ snapshots:
       sleep-promise: 9.1.0
       slice-ansi: 7.1.2
       stdout-update: 4.0.1
-      strip-ansi: 7.1.2
+      strip-ansi: 7.2.0
     optionalDependencies:
       '@reflink/reflink': 0.1.19
 
@@ -10902,7 +10915,7 @@ snapshots:
       simple-git: 3.31.1
       slice-ansi: 7.1.2
       stdout-update: 4.0.1
-      strip-ansi: 7.1.2
+      strip-ansi: 7.2.0
       validate-npm-package-name: 6.0.2
       which: 5.0.0
       yargs: 17.7.2
@@ -11098,7 +11111,7 @@ snapshots:
       log-symbols: 6.0.0
       stdin-discarder: 0.2.2
       string-width: 7.2.0
-      strip-ansi: 7.1.2
+      strip-ansi: 7.2.0
 
   ora@9.3.0:
     dependencies:
@@ -11864,7 +11877,7 @@ snapshots:
       ansi-escapes: 6.2.1
       ansi-styles: 6.2.3
       string-width: 7.2.0
-      strip-ansi: 7.1.2
+      strip-ansi: 7.2.0
 
   steno@4.0.2: {}
 
@@ -11884,7 +11897,7 @@ snapshots:
     dependencies:
       emoji-regex: 10.6.0
       get-east-asian-width: 1.5.0
-      strip-ansi: 7.1.2
+      strip-ansi: 7.2.0
 
   string-width@8.2.0:
     dependencies:
