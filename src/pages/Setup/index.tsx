@@ -412,6 +412,14 @@ interface RuntimeInstallEventPayload {
   };
 }
 
+interface SetupInstallEventPayload {
+  phase?: 'preparing' | 'installing' | 'verifying' | 'completed' | 'failed';
+  status?: 'running' | 'completed' | 'failed';
+  percent?: number;
+  detail?: string;
+  error?: string;
+}
+
 interface GatewayDiagnosticView {
   message: string;
   detail?: string;
@@ -2221,8 +2229,54 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
     skills.map((s) => ({ ...s, status: 'pending' as InstallStatus }))
   );
   const [overallProgress, setOverallProgress] = useState(0);
+  const [installDetail, setInstallDetail] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const installStarted = useRef(false);
+  const completed = useRef(false);
+
+  useEffect(() => {
+    const unlisten = desktopApi.ipcRenderer.on('setup:install-progress', (payload) => {
+      const event = payload as SetupInstallEventPayload;
+      const percent = typeof event.percent === 'number' ? Math.max(0, Math.min(100, Math.round(event.percent))) : 10;
+
+      if (event.detail) {
+        setInstallDetail(event.detail);
+      }
+
+      if (event.status === 'failed') {
+        setSkillStates(prev => prev.map(s => ({ ...s, status: 'failed' })));
+        setOverallProgress(percent);
+        setErrorMessage(event.error || t('installing.error'));
+        toast.error('Environment setup failed');
+        return;
+      }
+
+      if (event.status === 'completed') {
+        setSkillStates(prev => prev.map(s => ({ ...s, status: 'completed' })));
+        setOverallProgress(100);
+        setInstallDetail(event.detail || null);
+        if (!completed.current) {
+          completed.current = true;
+          window.setTimeout(() => {
+            onComplete(skills.map(s => s.id));
+          }, 800);
+        }
+        return;
+      }
+
+      setSkillStates(prev => prev.map(s => ({
+        ...s,
+        status: s.status === 'completed' ? 'completed' : 'installing',
+      })));
+      setOverallProgress(percent);
+    });
+
+    return () => {
+      if (typeof unlisten === 'function') {
+        unlisten();
+      }
+    };
+  }, [onComplete, skills, t]);
 
   // Real installation process
   useEffect(() => {
@@ -2234,23 +2288,25 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
         // Step 1: Initialize all skills to 'installing' state for UI
         setSkillStates(prev => prev.map(s => ({ ...s, status: 'installing' })));
         setOverallProgress(10);
+        setInstallDetail(t('installing.wait'));
 
-        // Step 2: Call the backend to install uv and setup Python
+        // Step 2: Start the backend install task and let progress events update the UI
         const result = await desktopApi.ipcRenderer.invoke('uv:install-all') as {
           success: boolean;
-          error?: string
+          error?: string;
+          started?: boolean;
+          alreadyRunning?: boolean;
         };
 
-        if (result.success) {
-          setSkillStates(prev => prev.map(s => ({ ...s, status: 'completed' })));
-          setOverallProgress(100);
-
-          await new Promise((resolve) => setTimeout(resolve, 800));
-          onComplete(skills.map(s => s.id));
-        } else {
+        if (!result.success) {
           setSkillStates(prev => prev.map(s => ({ ...s, status: 'failed' })));
           setErrorMessage(result.error || 'Unknown error during installation');
           toast.error('Environment setup failed');
+          return;
+        }
+
+        if (result.alreadyRunning) {
+          setInstallDetail(t('installing.wait'));
         }
       } catch (err) {
         setSkillStates(prev => prev.map(s => ({ ...s, status: 'failed' })));
@@ -2260,7 +2316,7 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
     };
 
     runRealInstall();
-  }, [skills, onComplete]);
+  }, [onComplete, skills, t]);
 
   const getStatusIcon = (status: InstallStatus) => {
     switch (status) {
@@ -2366,7 +2422,7 @@ function InstallingContent({ skills, onComplete, onSkip }: InstallingContentProp
 
       {!errorMessage && (
         <p className="text-sm text-slate-400 text-center">
-          {t('installing.wait')}
+          {installDetail || t('installing.wait')}
         </p>
       )}
       <div className="flex justify-end">
