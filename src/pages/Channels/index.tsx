@@ -385,6 +385,7 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
   const [pluginStatus, setPluginStatus] = useState<ChannelPluginStatus | null>(null);
   const [pluginStatusLoading, setPluginStatusLoading] = useState(false);
   const firstInputRef = useRef<HTMLInputElement>(null);
+  const pluginStatusRequestIdRef = useRef<string | null>(null);
   const [validationResult, setValidationResult] = useState<{
     valid: boolean;
     errors: string[];
@@ -442,7 +443,52 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
   }, [selectedType]);
 
   useEffect(() => {
+    const unsubscribe = desktopApi.ipcRenderer.on('channel:plugin-status', (payload) => {
+      const event = payload as {
+        requestId?: string;
+        success?: boolean;
+        status?: ChannelPluginStatus;
+        error?: string;
+        channelType?: string;
+      };
+
+      if (!event?.requestId || event.requestId !== pluginStatusRequestIdRef.current) {
+        return;
+      }
+
+      if (event.channelType !== 'matrix') {
+        return;
+      }
+
+      pluginStatusRequestIdRef.current = null;
+
+      if (event.success && event.status) {
+        setPluginStatus(event.status);
+      } else {
+        setPluginStatus({
+          required: true,
+          channelType: 'matrix',
+          pluginId: 'matrix',
+          installed: false,
+          enabled: false,
+          status: 'error',
+          origin: 'unknown',
+          message: event.error || 'Failed to fetch Matrix plugin status',
+        });
+      }
+      setPluginStatusLoading(false);
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (selectedType !== 'matrix') {
+      pluginStatusRequestIdRef.current = null;
       setPluginStatus(null);
       setPluginStatusLoading(false);
       return;
@@ -450,36 +496,36 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
 
     let cancelled = false;
     setPluginStatusLoading(true);
+    const requestId = `matrix-plugin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    pluginStatusRequestIdRef.current = requestId;
 
-    desktopApi.ipcRenderer
-      .invoke('channel:getPluginStatus', selectedType)
-      .then((result) => {
-        if (!cancelled) {
-          setPluginStatus(result as ChannelPluginStatus);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setPluginStatus({
-            required: true,
-            channelType: selectedType,
-            pluginId: 'matrix',
-            installed: false,
-            enabled: false,
-            status: 'error',
-            origin: 'unknown',
-            message: String(error),
-          });
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setPluginStatusLoading(false);
-        }
-      });
+    const timer = window.setTimeout(() => {
+      desktopApi.ipcRenderer
+        .invoke('channel:getPluginStatusAsync', selectedType, requestId)
+        .catch((error) => {
+          if (!cancelled && pluginStatusRequestIdRef.current === requestId) {
+            pluginStatusRequestIdRef.current = null;
+            setPluginStatus({
+              required: true,
+              channelType: selectedType,
+              pluginId: 'matrix',
+              installed: false,
+              enabled: false,
+              status: 'error',
+              origin: 'unknown',
+              message: String(error),
+            });
+            setPluginStatusLoading(false);
+          }
+        });
+    }, 0);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
+      if (pluginStatusRequestIdRef.current === requestId) {
+        pluginStatusRequestIdRef.current = null;
+      }
     };
   }, [selectedType]);
 
