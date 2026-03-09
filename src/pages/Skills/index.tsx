@@ -641,6 +641,14 @@ export function Skills() {
 
   const [skillsDirPath, setSkillsDirPath] = useState('~/.openclaw/skills');
 
+  const handleRefresh = useCallback(() => {
+    if (activeTab === 'marketplace') {
+      searchSkills(marketplaceQuery, { force: true });
+      return;
+    }
+    fetchSkills();
+  }, [activeTab, marketplaceQuery, searchSkills, fetchSkills]);
+
   useEffect(() => {
     desktopApi.ipcRenderer.invoke('openclaw:getSkillsDir')
       .then((dir) => setSkillsDirPath(dir as string))
@@ -664,7 +672,7 @@ export function Skills() {
       && marketplaceQuery === ''
       && marketplaceDiscoveryAttemptedRef.current
     ) {
-      searchSkills('');
+      searchSkills('', { auto: true, silent: true });
     }
   }, [marketplaceQuery, activeTab, searchSkills]);
 
@@ -701,7 +709,7 @@ export function Skills() {
       return;
     }
     marketplaceDiscoveryAttemptedRef.current = true;
-    searchSkills('');
+    searchSkills('', { auto: true, silent: true });
   }, [activeTab, marketplaceQuery, searching, searchSkills]);
 
   // Handle uninstall
@@ -733,7 +741,11 @@ export function Skills() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={fetchSkills} disabled={!isGatewayRunning}>
+          <Button
+            variant="outline"
+            onClick={handleRefresh}
+            disabled={activeTab !== 'marketplace' && !isGatewayRunning}
+          >
             <RefreshCw className="h-4 w-4 mr-2" />
             {t('refresh')}
           </Button>
