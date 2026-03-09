@@ -172,7 +172,7 @@ export function defaultAuthModeForProvider(
   }
 
   if (type === 'openai') {
-    if (existingTypes.has('openai-codex') && !existingTypes.has('openai')) {
+    if (existingTypes.has('openai') && !existingTypes.has('openai-codex')) {
       return 'oauth';
     }
     return 'apikey';
@@ -195,7 +195,7 @@ export function isProviderAuthModeAvailable(
   }
 
   if (authMode === 'oauth') {
-    return !existingTypes.has('openai-codex');
+    return true;
   }
 
   return !existingTypes.has('openai');
