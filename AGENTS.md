@@ -47,6 +47,15 @@ Standard dev commands are in `package.json` scripts and `README.md`. Key ones:
 - Do not skip this workflow unless the user explicitly says not to create cards, not to create PRs, or not to follow the workflow.
 - Never merge workflow-driven changes directly to `main`.
 
+## Release packaging rules
+
+- The main repository checkout at `/Users/mi/Projects/ClawX` is the only allowed source for final release packaging.
+- Do not develop directly in the main checkout. Use `git worktree` plus `codex/` branches for task work, then merge into `develop`.
+- Only package from a clean `develop` checkout that is fully synced to `origin/develop`.
+- If the main checkout has uncommitted changes, untracked source/config files, or is ahead/behind/diverged from `origin/develop`, final packaging must be blocked until it is reconciled.
+- Any local change that should appear in a release must be merged into `develop` before packaging. Do not package from ad hoc worktrees or detached checkouts as a workaround.
+- `package`, `package:full`, `package:mac`, and all `package:mac:dmg*` commands must run release preflight first and fail fast if the repository is not in a known final state.
+
 ## Skills
 
 ### Available skills

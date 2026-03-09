@@ -47,6 +47,7 @@ coverage/
 # Cache
 .cache/
 .turbo/
+.codex-cache/
 *.tsbuildinfo
 
 # Desktop bundles
