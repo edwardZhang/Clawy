@@ -716,6 +716,8 @@ function AddProviderDialog({
   const effectiveSelectedType = selectedType
     ? resolveProviderTypeForAuth(selectedType, authMode)
     : null;
+  const hasExistingOpenAICodex = existingTypes.has('openai-codex');
+  const hasExistingOpenAIKeyProvider = existingTypes.has('openai');
   const oauthModeAvailable = selectedType
     ? isProviderAuthModeAvailable(selectedType, 'oauth', existingTypes)
     : false;
@@ -1076,12 +1078,12 @@ function AddProviderDialog({
                       {t('aiProviders.oauth.apikeyMode')}
                     </button>
                   </div>
-                  {selectedType === 'openai' && !oauthModeAvailable && (
+                  {selectedType === 'openai' && hasExistingOpenAICodex && (
                     <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
                       {t('aiProviders.oauth.codexConfiguredHint')}
                     </div>
                   )}
-                  {selectedType === 'openai' && !apiKeyModeAvailable && (
+                  {selectedType === 'openai' && hasExistingOpenAIKeyProvider && (
                     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
                       {t('aiProviders.oauth.apiKeyConfiguredHint')}
                     </div>
