@@ -93,6 +93,7 @@ struct BridgeState {
     gateway_status: Arc<Mutex<GatewayStatus>>,
     gateway_runtime: Arc<Mutex<GatewayRuntime>>,
     runtime_install_runtime: Arc<Mutex<RuntimeInstallRuntime>>,
+    setup_install_runtime: Arc<Mutex<bool>>,
     openclaw_update_status_runtime: Arc<Mutex<bool>>,
     updater_status: Arc<Mutex<UpdateStatusPayload>>,
     updater_runtime: Arc<Mutex<UpdaterRuntime>>,
@@ -168,6 +169,18 @@ struct RuntimeInstallProgressPayload {
     detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     progress: Option<DownloadProgressPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupInstallProgressPayload {
+    phase: String,
+    status: String,
+    percent: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -1820,6 +1833,42 @@ fn emit_runtime_install_progress(
     let _ = app.emit("runtime:install-progress", payload);
 }
 
+fn emit_setup_install_progress(
+    app: &AppHandle,
+    phase: impl Into<String>,
+    status: impl Into<String>,
+    percent: f64,
+    detail: Option<String>,
+    error: Option<String>,
+) {
+    let payload = SetupInstallProgressPayload {
+        phase: phase.into(),
+        status: status.into(),
+        percent,
+        detail,
+        error,
+    };
+    let _ = app.emit("setup:install-progress", payload);
+}
+
+fn begin_setup_install(state: &BridgeState) -> Result<bool, String> {
+    let mut runtime = state
+        .setup_install_runtime
+        .lock()
+        .map_err(|_| "Failed to lock setup install state".to_string())?;
+    if *runtime {
+        return Ok(false);
+    }
+    *runtime = true;
+    Ok(true)
+}
+
+fn finish_setup_install(state: &BridgeState) {
+    if let Ok(mut runtime) = state.setup_install_runtime.lock() {
+        *runtime = false;
+    }
+}
+
 fn emit_openclaw_update_status_event(
     app: &AppHandle,
     mode: OpenClawUpdateStatusMode,
@@ -1924,6 +1973,28 @@ fn spawn_runtime_install_task<F>(
                 100.0,
                 version.as_deref(),
                 None,
+                None,
+                Some(error),
+            );
+        }
+    });
+}
+
+fn spawn_setup_install_task<F>(app: &AppHandle, state: &BridgeState, work: F)
+where
+    F: FnOnce(&AppHandle, &BridgeState) -> Result<(), String> + Send + 'static,
+{
+    let app_handle = app.clone();
+    let state_handle = state.clone();
+    std::thread::spawn(move || {
+        let result = work(&app_handle, &state_handle);
+        finish_setup_install(&state_handle);
+        if let Err(error) = result {
+            emit_setup_install_progress(
+                &app_handle,
+                "failed",
+                "failed",
+                100.0,
                 None,
                 Some(error),
             );
@@ -7364,25 +7435,47 @@ fn should_optimize_network() -> bool {
         .unwrap_or(true)
 }
 
-fn uv_install_all() -> Result<Value, String> {
+fn uv_install_all_with_progress(app: &AppHandle) -> Result<(), String> {
     let (mut uv_binary, mut source) = resolve_uv_binary();
+    emit_setup_install_progress(
+        app,
+        "preparing",
+        "running",
+        8.0,
+        Some("Checking uv runtime.".into()),
+        None,
+    );
     if source == "missing" || (!uv_binary.exists() && uv_binary != PathBuf::from("uv")) {
+        emit_setup_install_progress(
+            app,
+            "installing",
+            "running",
+            24.0,
+            Some("Installing managed uv runtime.".into()),
+            None,
+        );
         match install_managed_uv_binary_in_base(&clawy_base_dir()) {
             Ok(path) => {
                 uv_binary = path;
                 source = "managed";
             }
             Err(err) => {
-                return Ok(json!({
-                    "success": false,
-                    "error": format!(
-                        "uv not found in system PATH, managed install failed, and bundled binary missing at {}: {err}",
-                        uv_binary.to_string_lossy()
-                    ),
-                }));
+                return Err(format!(
+                    "uv not found in system PATH, managed install failed, and bundled binary missing at {}: {err}",
+                    uv_binary.to_string_lossy()
+                ));
             }
         }
     }
+
+    emit_setup_install_progress(
+        app,
+        "installing",
+        "running",
+        48.0,
+        Some(format!("Using uv from {source} and preparing Python 3.12.")),
+        None,
+    );
 
     let mut command = Command::new(&uv_binary);
     command
@@ -7400,6 +7493,15 @@ fn uv_install_all() -> Result<Value, String> {
         command.env("UV_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple/");
     }
 
+    emit_setup_install_progress(
+        app,
+        "installing",
+        "running",
+        72.0,
+        Some("Installing Python 3.12 runtime and essential tools.".into()),
+        None,
+    );
+
     let output = command.output().map_err(|err| {
         format!(
             "Failed to launch uv from {}: {err}",
@@ -7408,7 +7510,23 @@ fn uv_install_all() -> Result<Value, String> {
     })?;
 
     if output.status.success() {
-        return Ok(json!({ "success": true }));
+        emit_setup_install_progress(
+            app,
+            "verifying",
+            "running",
+            92.0,
+            Some("Verifying the Python environment.".into()),
+            None,
+        );
+        emit_setup_install_progress(
+            app,
+            "completed",
+            "completed",
+            100.0,
+            Some("Essential tools installed.".into()),
+            None,
+        );
+        return Ok(());
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -7420,10 +7538,7 @@ fn uv_install_all() -> Result<Value, String> {
     } else {
         format!("uv exited with {}", output.status)
     };
-    Ok(json!({
-        "success": false,
-        "error": format!("Python installation failed [{source}]: {detail}"),
-    }))
+    Err(format!("Python installation failed [{source}]: {detail}"))
 }
 
 fn kill_child_process(child: &mut Child) {
@@ -10291,7 +10406,33 @@ fn invoke_ipc(
                 source != "missing" && (binary == PathBuf::from("uv") || binary.exists())
             ))
         }
-        "uv:install-all" => uv_install_all(),
+        "uv:install-all" => {
+            if !begin_setup_install(&state)? {
+                return Ok(json!({
+                    "success": true,
+                    "started": false,
+                    "alreadyRunning": true,
+                }));
+            }
+
+            emit_setup_install_progress(
+                &app,
+                "preparing",
+                "running",
+                2.0,
+                Some("Preparing environment installation.".into()),
+                None,
+            );
+
+            spawn_setup_install_task(&app, &state, move |app_handle, _state_handle| {
+                uv_install_all_with_progress(app_handle)
+            });
+
+            Ok(json!({
+                "success": true,
+                "started": true,
+            }))
+        }
 
         "file:stage" => {
             let paths = args
