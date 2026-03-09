@@ -168,8 +168,10 @@ export function Settings() {
   const currentVersion = useUpdateStore((state) => state.currentVersion);
   const updateSetAutoDownload = useUpdateStore((state) => state.setAutoDownload);
   const [controlUiInfo, setControlUiInfo] = useState<ControlUiInfo | null>(null);
+  const [controlUiInfoLoading, setControlUiInfoLoading] = useState(false);
   const [openclawCliCommand, setOpenclawCliCommand] = useState('');
   const [openclawCliError, setOpenclawCliError] = useState<string | null>(null);
+  const [openclawCliLoading, setOpenclawCliLoading] = useState(false);
   const [proxyServerDraft, setProxyServerDraft] = useState('');
   const [proxyHttpServerDraft, setProxyHttpServerDraft] = useState('');
   const [proxyHttpsServerDraft, setProxyHttpsServerDraft] = useState('');
@@ -326,8 +328,57 @@ export function Settings() {
     }
   };
 
+  const refreshControlUiInfo = useCallback(async (showErrorToast = false) => {
+    setControlUiInfoLoading(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('gateway:getControlUiUrl') as {
+        success: boolean;
+        url?: string;
+        token?: string;
+        port?: number;
+        error?: string;
+      };
+      if (result.success && result.url && result.token && typeof result.port === 'number') {
+        setControlUiInfo({ url: result.url, token: result.token, port: result.port });
+      } else if (showErrorToast && result.error) {
+        toast.error(result.error);
+      }
+    } catch (error) {
+      if (showErrorToast) {
+        toast.error(String(error));
+      }
+    } finally {
+      setControlUiInfoLoading(false);
+    }
+  }, []);
+
+  const loadOpenClawCliCommand = useCallback(async () => {
+    if (!showCliTools) return;
+    setOpenclawCliLoading(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('openclaw:getCliCommand') as {
+        success: boolean;
+        command?: string;
+        error?: string;
+      };
+      if (result.success && result.command) {
+        setOpenclawCliCommand(result.command);
+        setOpenclawCliError(null);
+      } else {
+        setOpenclawCliCommand('');
+        setOpenclawCliError(result.error || 'OpenClaw CLI unavailable');
+      }
+    } catch (error) {
+      setOpenclawCliCommand('');
+      setOpenclawCliError(String(error));
+    } finally {
+      setOpenclawCliLoading(false);
+    }
+  }, [showCliTools]);
+
   // Open developer console
   const openDevConsole = async () => {
+    setControlUiInfoLoading(true);
     try {
       const result = await desktopApi.ipcRenderer.invoke('gateway:getControlUiUrl') as {
         success: boolean;
@@ -344,22 +395,8 @@ export function Settings() {
       }
     } catch (err) {
       console.error('Error opening Dev Console:', err);
-    }
-  };
-
-  const refreshControlUiInfo = async () => {
-    try {
-      const result = await desktopApi.ipcRenderer.invoke('gateway:getControlUiUrl') as {
-        success: boolean;
-        url?: string;
-        token?: string;
-        port?: number;
-      };
-      if (result.success && result.url && result.token && typeof result.port === 'number') {
-        setControlUiInfo({ url: result.url, token: result.token, port: result.port });
-      }
-    } catch {
-      // Ignore refresh errors
+    } finally {
+      setControlUiInfoLoading(false);
     }
   };
 
@@ -374,33 +411,24 @@ export function Settings() {
   };
 
   useEffect(() => {
-    if (!showCliTools) return;
+    if (!devModeUnlocked) {
+      return;
+    }
+
     let cancelled = false;
-
-    (async () => {
-      try {
-        const result = await desktopApi.ipcRenderer.invoke('openclaw:getCliCommand') as {
-          success: boolean;
-          command?: string;
-          error?: string;
-        };
+    const timeoutId = window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
         if (cancelled) return;
-        if (result.success && result.command) {
-          setOpenclawCliCommand(result.command);
-          setOpenclawCliError(null);
-        } else {
-          setOpenclawCliCommand('');
-          setOpenclawCliError(result.error || 'OpenClaw CLI unavailable');
-        }
-      } catch (error) {
-        if (cancelled) return;
-        setOpenclawCliCommand('');
-        setOpenclawCliError(String(error));
-      }
-    })();
+        void refreshControlUiInfo();
+        void loadOpenClawCliCommand();
+      });
+    }, 80);
 
-    return () => { cancelled = true; };
-  }, [devModeUnlocked, showCliTools]);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [devModeUnlocked, loadOpenClawCliCommand, refreshControlUiInfo]);
 
   const handleCopyCliCommand = async () => {
     if (!openclawCliCommand) return;
@@ -1057,10 +1085,10 @@ export function Settings() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={refreshControlUiInfo}
-                    disabled={!devModeUnlocked}
+                    onClick={() => { void refreshControlUiInfo(true); }}
+                    disabled={!devModeUnlocked || controlUiInfoLoading}
                   >
-                    <RefreshCw className="h-4 w-4 mr-2" />
+                    <RefreshCw className={`h-4 w-4 mr-2${controlUiInfoLoading ? ' animate-spin' : ''}`} />
                     {t('common:actions.load')}
                   </Button>
                   <Button
@@ -1092,7 +1120,11 @@ export function Settings() {
                     <Input
                       readOnly
                       value={openclawCliCommand}
-                      placeholder={openclawCliError || t('developer.cmdUnavailable')}
+                      placeholder={
+                        openclawCliLoading
+                          ? t('common:status.loading')
+                          : (openclawCliError || t('developer.cmdUnavailable'))
+                      }
                       className="font-mono"
                     />
                     <Button

@@ -7097,6 +7097,47 @@ fn download_update_internal(app: &AppHandle, state: &BridgeState) -> Result<(), 
     Ok(())
 }
 
+fn spawn_update_check_task(app: &AppHandle, state: &BridgeState) -> Result<bool, String> {
+    if update_status_snapshot(state)?.status == "checking" {
+        return Ok(false);
+    }
+
+    let app_handle = app.clone();
+    let state_handle = state.clone();
+    thread::spawn(move || {
+        let _ = update_check_internal(&app_handle, &state_handle);
+    });
+
+    Ok(true)
+}
+
+fn spawn_update_download_task(app: &AppHandle, state: &BridgeState) -> Result<bool, String> {
+    if update_status_snapshot(state)?.status == "downloading" {
+        return Ok(false);
+    }
+
+    {
+        let runtime = state
+            .updater_runtime
+            .lock()
+            .map_err(|_| "Updater runtime lock poisoned".to_string())?;
+        if runtime.is_downloading {
+            return Ok(false);
+        }
+        if runtime.download_target.is_none() {
+            return Err("No update metadata is available. Run update:check first.".to_string());
+        }
+    }
+
+    let app_handle = app.clone();
+    let state_handle = state.clone();
+    thread::spawn(move || {
+        let _ = download_update_internal(&app_handle, &state_handle);
+    });
+
+    Ok(true)
+}
+
 fn uv_target_dir_name() -> String {
     let os = match std::env::consts::OS {
         "macos" => "darwin",
@@ -10041,6 +10082,17 @@ fn invoke_ipc(
                 .map_err(|err| err.to_string())?)
         }
         "update:version" => Ok(json!(app.package_info().version.to_string())),
+        "update:checkAsync" => match spawn_update_check_task(&app, &state) {
+            Ok(started) => Ok(json!({ "success": true, "started": started, "alreadyRunning": !started })),
+            Err(error) => {
+                let status = set_update_status(&app, &state, |status| {
+                    status.status = "error".into();
+                    status.error = Some(error.clone());
+                    status.progress = None;
+                })?;
+                Ok(json!({ "success": false, "error": error, "status": status }))
+            }
+        },
         "update:check" => match update_check_internal(&app, &state) {
             Ok(status) => Ok(json!({ "success": true, "status": status })),
             Err(error) => {
@@ -10054,6 +10106,20 @@ fn invoke_ipc(
         },
         "update:download" => match download_update_internal(&app, &state) {
             Ok(()) => Ok(json!({ "success": true })),
+            Err(error) => {
+                if let Ok(mut runtime) = state.updater_runtime.lock() {
+                    runtime.is_downloading = false;
+                }
+                let _ = set_update_status(&app, &state, |status| {
+                    status.status = "error".into();
+                    status.error = Some(error.clone());
+                    status.progress = None;
+                });
+                Ok(json!({ "success": false, "error": error }))
+            }
+        },
+        "update:downloadAsync" => match spawn_update_download_task(&app, &state) {
+            Ok(started) => Ok(json!({ "success": true, "started": started, "alreadyRunning": !started })),
             Err(error) => {
                 if let Ok(mut runtime) = state.updater_runtime.lock() {
                     runtime.is_downloading = false;
