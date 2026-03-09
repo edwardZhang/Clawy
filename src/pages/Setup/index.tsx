@@ -1530,12 +1530,22 @@ function ProviderContent({
         ) as { baseUrl?: string; model?: string; authMode?: ProviderAuthMode | null } | null;
         const storedKey = await desktopApi.ipcRenderer.invoke('provider:getApiKey', providerIdForLoad) as string | null;
         if (!cancelled) {
-          setAuthMode(defaultAuthModeForProvider(
-            selectedProvider,
-            new Set(list.map((item) => item.type)),
-            providers.find((p) => p.id === selectedProvider),
-            savedProvider?.authMode ?? null
-          ));
+          const nextExistingTypes = new Set(list.map((item) => item.type));
+          const nextAuthMode = savedProvider?.authMode
+            ? defaultAuthModeForProvider(
+              selectedProvider,
+              nextExistingTypes,
+              providers.find((p) => p.id === selectedProvider),
+              savedProvider.authMode
+            )
+            : preferredInstance
+              ? defaultAuthModeForProvider(
+                selectedProvider,
+                nextExistingTypes,
+                providers.find((p) => p.id === selectedProvider)
+              )
+              : authMode;
+          setAuthMode(nextAuthMode);
           if (storedKey) {
             onApiKeyChange(storedKey);
           } else {
@@ -1554,7 +1564,7 @@ function ProviderContent({
       }
     })();
     return () => { cancelled = true; };
-  }, [effectiveSelectedProviderType, onApiKeyChange, selectedProvider, providers]);
+  }, [authMode, effectiveSelectedProviderType, onApiKeyChange, selectedProvider, providers]);
 
   useEffect(() => {
     if (!providerMenuOpen) return;
