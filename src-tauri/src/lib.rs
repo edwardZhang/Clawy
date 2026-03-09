@@ -198,6 +198,18 @@ struct ClawhubSearchResultEventPayload {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChannelPluginStatusEventPayload {
+    request_id: String,
+    channel_type: String,
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateStatusPayload {
@@ -1917,6 +1929,24 @@ fn emit_clawhub_search_result_event(
         error,
     };
     let _ = app.emit("clawhub:search-result", payload);
+}
+
+fn emit_channel_plugin_status_event(
+    app: &AppHandle,
+    request_id: String,
+    channel_type: String,
+    success: bool,
+    status: Option<Value>,
+    error: Option<String>,
+) {
+    let payload = ChannelPluginStatusEventPayload {
+        request_id,
+        channel_type,
+        success,
+        status,
+        error,
+    };
+    let _ = app.emit("channel:plugin-status", payload);
 }
 
 fn begin_runtime_install(state: &BridgeState, kind: ManagedRuntimeKind) -> Result<bool, String> {
@@ -5521,6 +5551,28 @@ fn get_channel_plugin_status_value(channel_type: &str) -> Result<Value, String> 
     };
 
     Ok(json!(status))
+}
+
+fn spawn_channel_plugin_status_task(app: &AppHandle, request_id: String, channel_type: String) {
+    let app = app.clone();
+    thread::spawn(move || match get_channel_plugin_status_value(&channel_type) {
+        Ok(status) => emit_channel_plugin_status_event(
+            &app,
+            request_id,
+            channel_type,
+            true,
+            Some(status),
+            None,
+        ),
+        Err(error) => emit_channel_plugin_status_event(
+            &app,
+            request_id,
+            channel_type,
+            false,
+            None,
+            Some(error),
+        ),
+    });
 }
 
 fn run_openclaw_cli_command(args: &[&str], label: &str) -> Result<String, String> {
@@ -10447,6 +10499,28 @@ fn invoke_ipc(
         "channel:getPluginStatus" => {
             let channel_type = args.get(0).and_then(Value::as_str).unwrap_or_default();
             get_channel_plugin_status_value(channel_type)
+        }
+        "channel:getPluginStatusAsync" => {
+            let channel_type = args
+                .get(0)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let request_id = args
+                .get(1)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "requestId is required".to_string())?
+                .to_string();
+
+            if channel_type.is_empty() {
+                return Err("Channel type is required".to_string());
+            }
+
+            spawn_channel_plugin_status_task(&app, request_id, channel_type);
+            Ok(json!({ "success": true, "started": true }))
         }
         "channel:deleteConfig" => {
             let channel_type = args.get(0).and_then(Value::as_str).unwrap_or_default();
