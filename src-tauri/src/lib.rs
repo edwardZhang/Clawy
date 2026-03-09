@@ -15,6 +15,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::menu::{MenuBuilder, MenuEvent, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -181,6 +182,18 @@ struct SetupInstallProgressPayload {
     percent: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClawhubSearchResultEventPayload {
+    request_id: String,
+    query: String,
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    results: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -1886,6 +1899,24 @@ fn emit_openclaw_update_status_event(
         error,
     };
     let _ = app.emit("openclaw:update-status-changed", payload);
+}
+
+fn emit_clawhub_search_result_event(
+    app: &AppHandle,
+    request_id: String,
+    query: String,
+    success: bool,
+    results: Option<Vec<Value>>,
+    error: Option<String>,
+) {
+    let payload = ClawhubSearchResultEventPayload {
+        request_id,
+        query,
+        success,
+        results,
+        error,
+    };
+    let _ = app.emit("clawhub:search-result", payload);
 }
 
 fn begin_runtime_install(state: &BridgeState, kind: ManagedRuntimeKind) -> Result<bool, String> {
@@ -4981,6 +5012,44 @@ fn run_clawhub_command(args: &[String]) -> Result<String, String> {
     apply_proxy_env(&mut command, &settings);
 
     run_command_capture(&mut command, "clawhub")
+}
+
+fn build_clawhub_search_command_args(query: &str, limit: Option<u64>) -> Vec<String> {
+    let mut command_args = if query.trim().is_empty() {
+        vec![String::from("explore")]
+    } else {
+        vec![String::from("search"), query.trim().to_string()]
+    };
+    if let Some(limit) = limit {
+        command_args.push(String::from("--limit"));
+        command_args.push(limit.to_string());
+    }
+    command_args
+}
+
+fn spawn_clawhub_search_task(
+    app: &AppHandle,
+    request_id: String,
+    query: String,
+    limit: Option<u64>,
+) {
+    let app = app.clone();
+    thread::spawn(move || {
+        let command_args = build_clawhub_search_command_args(&query, limit);
+        match run_clawhub_command(&command_args) {
+            Ok(output) => {
+                let results = if command_args.first().map(String::as_str) == Some("explore") {
+                    parse_clawhub_explore_results(&output)
+                } else {
+                    parse_clawhub_search_results(&output)
+                };
+                emit_clawhub_search_result_event(&app, request_id, query, true, Some(results), None);
+            }
+            Err(error) => {
+                emit_clawhub_search_result_event(&app, request_id, query, false, None, Some(error));
+            }
+        }
+    });
 }
 
 fn parse_clawhub_list_results(output: &str) -> Vec<Value> {
@@ -10235,15 +10304,10 @@ fn invoke_ipc(
                 .and_then(Value::as_u64)
                 .map(|value| value.to_string());
 
-            let mut command_args = if query.is_empty() {
-                vec![String::from("explore")]
-            } else {
-                vec![String::from("search"), query]
-            };
-            if let Some(limit) = limit {
-                command_args.push(String::from("--limit"));
-                command_args.push(limit);
-            }
+            let command_args = build_clawhub_search_command_args(
+                &query,
+                limit.as_deref().and_then(|value| value.parse::<u64>().ok()),
+            );
 
             let output = run_clawhub_command(&command_args)?;
             let results = if command_args.first().map(String::as_str) == Some("explore") {
@@ -10254,6 +10318,33 @@ fn invoke_ipc(
             Ok(json!({
                 "success": true,
                 "results": results,
+            }))
+        }
+        "clawhub:searchAsync" => {
+            let payload = args
+                .get(0)
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let request_id = payload
+                .get("requestId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "requestId is required".to_string())?
+                .to_string();
+            let query = payload
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let limit = payload.get("limit").and_then(Value::as_u64);
+
+            spawn_clawhub_search_task(&app, request_id, query, limit);
+            Ok(json!({
+                "success": true,
+                "started": true,
             }))
         }
         "clawhub:install" => {

@@ -533,7 +533,10 @@ export function Skills() {
     uninstallSkill,
     searching,
     searchError,
-    installing
+    installing,
+    applyMarketplaceSearchResult,
+    hydrateMarketplaceResults,
+    clearMarketplaceSearchError,
   } = useSkillsStore();
   const { t } = useTranslation('skills');
   const gatewayStatus = useGatewayStore((state) => state.status);
@@ -542,7 +545,6 @@ export function Skills() {
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [activeTab, setActiveTab] = useState('all');
   const [selectedSource, setSelectedSource] = useState<'all' | 'built-in' | 'marketplace'>('all');
-  const marketplaceDiscoveryAttemptedRef = useRef(false);
   const previousMarketplaceQueryRef = useRef('');
 
   const isGatewayRunning = gatewayStatus.state === 'running';
@@ -670,11 +672,31 @@ export function Skills() {
       activeTab === 'marketplace'
       && previousQuery.trim() !== ''
       && marketplaceQuery === ''
-      && marketplaceDiscoveryAttemptedRef.current
     ) {
-      searchSkills('', { auto: true, silent: true });
+      hydrateMarketplaceResults('');
     }
-  }, [marketplaceQuery, activeTab, searchSkills]);
+  }, [marketplaceQuery, activeTab, hydrateMarketplaceResults]);
+
+  useEffect(() => {
+    if (activeTab !== 'marketplace') {
+      return;
+    }
+    clearMarketplaceSearchError();
+    hydrateMarketplaceResults(marketplaceQuery);
+  }, [activeTab, marketplaceQuery, clearMarketplaceSearchError, hydrateMarketplaceResults]);
+
+  useEffect(() => {
+    const unlisten = desktopApi.ipcRenderer.on('clawhub:search-result', (payload) => {
+      applyMarketplaceSearchResult(payload as {
+        requestId: string;
+        query: string;
+        success: boolean;
+        results?: MarketplaceSkill[];
+        error?: string;
+      });
+    });
+    return unlisten;
+  }, [applyMarketplaceSearchResult]);
 
   // Handle install
   const handleInstall = useCallback(async (slug: string) => {
@@ -693,24 +715,6 @@ export function Skills() {
       }
     }
   }, [installSkill, enableSkill, t, skillsDirPath]);
-
-  // Initial marketplace load (Discovery)
-  useEffect(() => {
-    if (activeTab !== 'marketplace') {
-      return;
-    }
-    if (marketplaceQuery.trim()) {
-      return;
-    }
-    if (searching) {
-      return;
-    }
-    if (marketplaceDiscoveryAttemptedRef.current) {
-      return;
-    }
-    marketplaceDiscoveryAttemptedRef.current = true;
-    searchSkills('', { auto: true, silent: true });
-  }, [activeTab, marketplaceQuery, searching, searchSkills]);
 
   // Handle uninstall
   const handleUninstall = useCallback(async (slug: string) => {
@@ -746,7 +750,7 @@ export function Skills() {
             onClick={handleRefresh}
             disabled={activeTab !== 'marketplace' && !isGatewayRunning}
           >
-            <RefreshCw className="h-4 w-4 mr-2" />
+            <RefreshCw className={cn('h-4 w-4 mr-2', activeTab === 'marketplace' && searching && 'animate-spin')} />
             {t('refresh')}
           </Button>
           {hasInstalledSkills && (

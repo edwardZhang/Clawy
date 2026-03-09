@@ -46,6 +46,14 @@ type MarketplaceCacheEntry = {
 
 type MarketplaceCache = Record<string, MarketplaceCacheEntry>;
 
+type MarketplaceSearchEventPayload = {
+  requestId: string;
+  query: string;
+  success: boolean;
+  results?: MarketplaceSkill[];
+  error?: string;
+};
+
 function normalizeErrorKey(
   error: unknown,
   {
@@ -146,6 +154,7 @@ interface SkillsState {
   loading: boolean;
   searching: boolean;
   searchError: string | null;
+  activeSearchRequestId: string | null;
   installing: Record<string, boolean>; // slug -> boolean
   error: string | null;
 
@@ -155,6 +164,12 @@ interface SkillsState {
     query: string,
     options?: { auto?: boolean; force?: boolean; silent?: boolean }
   ) => Promise<void>;
+  applyMarketplaceSearchResult: (
+    payload: MarketplaceSearchEventPayload,
+    options?: { silent?: boolean }
+  ) => void;
+  hydrateMarketplaceResults: (query: string) => void;
+  clearMarketplaceSearchError: () => void;
   installSkill: (slug: string, version?: string) => Promise<void>;
   uninstallSkill: (slug: string) => Promise<void>;
   enableSkill: (skillId: string) => Promise<void>;
@@ -169,6 +184,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   loading: false,
   searching: false,
   searchError: null,
+  activeSearchRequestId: null,
   installing: {},
   error: null,
 
@@ -269,6 +285,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         searchResults: cached.results,
         searchError: null,
         searching: false,
+        activeSearchRequestId: null,
       });
       if (!options.force) {
         return;
@@ -276,29 +293,22 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     }
 
     if (options.auto) {
-      set({ searchError: null, searching: false });
+      set({ searchError: null, searching: false, activeSearchRequestId: null });
       return;
     }
 
     set({ searching: true, searchError: null });
     try {
-      const result = await desktopApi.ipcRenderer.invoke(
-        'clawhub:search',
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      set({ activeSearchRequestId: requestId });
+      await desktopApi.ipcRenderer.invoke(
+        'clawhub:searchAsync',
         {
+          requestId,
           query: normalizedQuery,
           limit: normalizedQuery ? 20 : 30,
         },
-      ) as { success: boolean; results?: MarketplaceSkill[]; error?: string };
-      if (result.success) {
-        const results = result.results || [];
-        cacheMarketplaceResults(normalizedQuery, results);
-        set({ searchResults: results });
-      } else {
-        throw new Error(normalizeErrorKey(result.error || 'Search failed', {
-          timeoutKey: 'searchTimeoutError',
-          rateLimitKey: 'searchRateLimitError',
-        }));
-      }
+      );
     } catch (error) {
       const normalizedError = normalizeErrorKey(error, {
         timeoutKey: 'searchTimeoutError',
@@ -309,10 +319,56 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       set({
         searchError: options.silent || fallbackResults?.length ? null : normalizedError,
         searchResults: fallbackResults?.length ? fallbackResults : get().searchResults,
+        searching: false,
+        activeSearchRequestId: null,
       });
-    } finally {
-      set({ searching: false });
     }
+  },
+
+  applyMarketplaceSearchResult: (payload, options = {}) => {
+    if (payload.requestId !== get().activeSearchRequestId) {
+      return;
+    }
+    const normalizedQuery = payload.query.trim();
+    if (payload.success) {
+      const results = payload.results || [];
+      cacheMarketplaceResults(normalizedQuery, results);
+      set({
+        searchResults: results,
+        searchError: null,
+        searching: false,
+        activeSearchRequestId: null,
+      });
+      return;
+    }
+
+    const normalizedError = normalizeErrorKey(payload.error || 'Search failed', {
+      timeoutKey: 'searchTimeoutError',
+      rateLimitKey: 'searchRateLimitError',
+    });
+    const fallbackResults = getCachedMarketplaceResults(normalizedQuery, true)?.results;
+
+    set((state) => ({
+      searchError: options.silent || fallbackResults?.length ? null : normalizedError,
+      searchResults: fallbackResults?.length ? fallbackResults : state.searchResults,
+      searching: false,
+      activeSearchRequestId: null,
+    }));
+  },
+
+  hydrateMarketplaceResults: (query: string) => {
+    const normalizedQuery = query.trim();
+    const cached = getCachedMarketplaceResults(normalizedQuery, true);
+    set({
+      searchResults: cached?.results ?? [],
+      searchError: null,
+      searching: false,
+      activeSearchRequestId: null,
+    });
+  },
+
+  clearMarketplaceSearchError: () => {
+    set({ searchError: null });
   },
 
   installSkill: async (slug: string, version?: string) => {
