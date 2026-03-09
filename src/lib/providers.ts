@@ -172,7 +172,7 @@ export function defaultAuthModeForProvider(
   }
 
   if (type === 'openai') {
-    if (existingTypes.has('openai') && !existingTypes.has('openai-codex')) {
+    if (existingTypes.has('openai-codex') && !existingTypes.has('openai')) {
       return 'oauth';
     }
     return 'apikey';
