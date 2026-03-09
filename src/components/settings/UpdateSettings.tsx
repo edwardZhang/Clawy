@@ -40,9 +40,9 @@ export function UpdateSettings() {
     init();
   }, [init]);
 
-  const handleCheckForUpdates = useCallback(async () => {
+  const handleCheckForUpdates = useCallback(() => {
     clearError();
-    await checkForUpdates();
+    void checkForUpdates();
   }, [checkForUpdates, clearError]);
 
   const renderStatusIcon = () => {
@@ -101,7 +101,7 @@ export function UpdateSettings() {
         );
       case 'available':
         return (
-          <Button onClick={downloadUpdate} size="sm">
+          <Button onClick={() => { void downloadUpdate(); }} size="sm">
             <Download className="h-4 w-4 mr-2" />
             {t('updates.action.download')}
           </Button>

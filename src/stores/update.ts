@@ -133,11 +133,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     set({ status: 'checking', error: null });
     
     try {
-      const result = await Promise.race([
-        desktopApi.ipcRenderer.invoke('update:check'),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Update check timed out')), 30000))
-      ]) as {
+      const result = await desktopApi.ipcRenderer.invoke('update:checkAsync') as {
         success: boolean;
+        started?: boolean;
+        alreadyRunning?: boolean;
         error?: string;
         status?: {
           status: UpdateStatus;
@@ -156,16 +155,11 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
         });
       } else if (!result.success) {
         set({ status: 'error', error: result.error || 'Failed to check for updates' });
+      } else if (result.started === false && result.alreadyRunning) {
+        set({ status: 'checking', error: null });
       }
     } catch (error) {
       set({ status: 'error', error: String(error) });
-    } finally {
-      // In dev mode autoUpdater skips without emitting events, so the
-      // status may still be 'checking' or even 'idle'. Catch both.
-      const currentStatus = get().status;
-      if (currentStatus === 'checking' || currentStatus === 'idle') {
-        set({ status: 'error', error: 'Update check completed without a result. This usually means the app is running in dev mode.' });
-      }
     }
   },
 
@@ -173,13 +167,17 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
     set({ status: 'downloading', error: null });
     
     try {
-      const result = await desktopApi.ipcRenderer.invoke('update:download') as {
+      const result = await desktopApi.ipcRenderer.invoke('update:downloadAsync') as {
         success: boolean;
+        started?: boolean;
+        alreadyRunning?: boolean;
         error?: string;
       };
       
       if (!result.success) {
         set({ status: 'error', error: result.error || 'Failed to download update' });
+      } else if (result.started === false && result.alreadyRunning) {
+        set({ status: 'downloading', error: null });
       }
     } catch (error) {
       set({ status: 'error', error: String(error) });
