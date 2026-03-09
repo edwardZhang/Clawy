@@ -1313,6 +1313,15 @@ function ProviderContent({
   const [oauthPromptInput, setOauthPromptInput] = useState('');
   const [oauthProgressMessage, setOauthProgressMessage] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
+  const latestProviderSelectionRef = useRef<{
+    selectedProvider: string | null;
+    authMode: ProviderAuthMode;
+  }>({
+    selectedProvider: null,
+    authMode: 'oauth',
+  });
+  const providerSelectionTouchedRef = useRef(false);
+  const authModeTouchedRef = useRef(false);
   const effectiveSelectedProviderType = selectedProvider
     ? resolveProviderTypeForAuth(selectedProvider, authMode)
     : null;
@@ -1398,6 +1407,13 @@ function ProviderContent({
     };
   }, [onConfiguredChange, t, effectiveSelectedProviderType]);
 
+  useEffect(() => {
+    latestProviderSelectionRef.current = {
+      selectedProvider,
+      authMode,
+    };
+  }, [authMode, selectedProvider]);
+
   const handleStartOAuth = async () => {
     if (!effectiveSelectedProviderType || !selectedProvider) return;
 
@@ -1473,18 +1489,24 @@ function ProviderContent({
           || setupCandidates.find((p) => p.hasKey)
           || setupCandidates[0];
         if (preferred && !cancelled) {
+          const latestSelection = latestProviderSelectionRef.current;
+          if (providerSelectionTouchedRef.current && latestSelection.selectedProvider) {
+            return;
+          }
           const visibleType = preferred.type === 'openai-codex' ? 'openai' : preferred.type;
           onSelectProvider(visibleType);
           const savedProvider = await desktopApi.ipcRenderer.invoke(
             'provider:get',
             preferred.id
           ) as { authMode?: ProviderAuthMode | null } | null;
-          setAuthMode(defaultAuthModeForProvider(
-            visibleType,
-            nextConfiguredTypes,
-            providers.find((p) => p.id === visibleType),
-            savedProvider?.authMode ?? null
-          ));
+          if (!authModeTouchedRef.current) {
+            setAuthMode(defaultAuthModeForProvider(
+              visibleType,
+              nextConfiguredTypes,
+              providers.find((p) => p.id === visibleType),
+              savedProvider?.authMode ?? null
+            ));
+          }
           setSelectedProviderConfigId(preferred.id);
           const typeInfo = providers.find((p) => p.id === visibleType);
           const providerRequiresKey = visibleType === 'openai'
@@ -1745,6 +1767,8 @@ function ProviderContent({
     && !useOAuthFlow;
 
   const handleSelectProvider = (providerId: string) => {
+    providerSelectionTouchedRef.current = true;
+    authModeTouchedRef.current = false;
     onSelectProvider(providerId);
     setSelectedProviderConfigId(null);
     onConfiguredChange(false);
@@ -1895,6 +1919,7 @@ function ProviderContent({
                   <button
                     onClick={() => {
                       if ((supportsTokenAuth && tokenModeAvailable) || (isOAuth && oauthModeAvailable)) {
+                        authModeTouchedRef.current = true;
                         setAuthMode(supportsTokenAuth ? 'token' : 'oauth');
                       }
                     }}
@@ -1916,7 +1941,12 @@ function ProviderContent({
                   </button>
                 )}
                 <button
-                  onClick={() => apiKeyModeAvailable && setAuthMode('apikey')}
+                  onClick={() => {
+                    if (apiKeyModeAvailable) {
+                      authModeTouchedRef.current = true;
+                      setAuthMode('apikey');
+                    }
+                  }}
                   disabled={!apiKeyModeAvailable}
                   className={cn(
                     'flex-1 py-2 px-3 transition-colors',
