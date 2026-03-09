@@ -13,24 +13,8 @@ const QWEN_CLIENT_ID = 'f0304373b74a44d2b584a3fb70ca9e56';
 const QWEN_SCOPE = 'openid profile email model.completion';
 const QWEN_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 const OPENAI_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
-const OPENAI_CODEX_AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize';
-const OPENAI_CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
-const OPENAI_CODEX_REDIRECT_URI = 'http://localhost:1455/auth/callback';
-const OPENAI_CODEX_SCOPE = 'openid profile email offline_access';
-const OPENAI_CODEX_JWT_CLAIM_PATH = 'https://api.openai.com/auth';
 const OPENAI_CODEX_PRECHECK_URL =
   'https://auth.openai.com/oauth/authorize?response_type=code&client_id=clawy-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email';
-const OPENAI_CODEX_SUCCESS_HTML = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Authentication successful</title>
-</head>
-<body>
-  <p>Authentication successful. Return to Clawy to continue.</p>
-</body>
-</html>`;
 const TLS_CERT_ERROR_CODES = new Set([
   'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
@@ -130,44 +114,14 @@ function toFormUrlEncoded(data) {
     .join('&');
 }
 
-function generatePkce() {
+function generatePkceWithState() {
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
-  return { verifier, challenge };
-}
-
-function generatePkceWithState() {
-  const { verifier, challenge } = generatePkce();
   return {
     verifier,
     challenge,
     state: randomBytes(16).toString('base64url'),
   };
-}
-
-function createOpenAICodexState() {
-  return randomBytes(16).toString('hex');
-}
-
-function decodeJwt(token) {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) {
-      return null;
-    }
-    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized + '='.repeat((4 - (normalized.length % 4 || 4)) % 4);
-    return JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function extractOpenAICodexAccountId(accessToken) {
-  const payload = decodeJwt(accessToken);
-  const auth = payload?.[OPENAI_CODEX_JWT_CLAIM_PATH];
-  const accountId = auth?.chatgpt_account_id;
-  return typeof accountId === 'string' && accountId.length > 0 ? accountId : null;
 }
 
 function extractFailure(error) {
@@ -212,210 +166,6 @@ function formatOpenAICodexTlsFix(result) {
   }
 
   return `OpenAI OAuth prerequisites check failed because Node/OpenSSL could not validate TLS certificates (${result.code || 'tls-cert'}: ${result.message}). On Homebrew Node, run: brew postinstall ca-certificates && brew postinstall openssl@3, then try again.`;
-}
-
-function createOpenAICodexAuthorizationFlow(originator = 'pi') {
-  const { verifier, challenge } = generatePkce();
-  const state = createOpenAICodexState();
-  const url = new URL(OPENAI_CODEX_AUTHORIZE_URL);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('client_id', OPENAI_CODEX_CLIENT_ID);
-  url.searchParams.set('redirect_uri', OPENAI_CODEX_REDIRECT_URI);
-  url.searchParams.set('scope', OPENAI_CODEX_SCOPE);
-  url.searchParams.set('code_challenge', challenge);
-  url.searchParams.set('code_challenge_method', 'S256');
-  url.searchParams.set('state', state);
-  url.searchParams.set('id_token_add_organizations', 'true');
-  url.searchParams.set('codex_cli_simplified_flow', 'true');
-  url.searchParams.set('originator', originator);
-  return { verifier, state, url: url.toString() };
-}
-
-function parseAuthorizationInput(input) {
-  const value = input.trim();
-  if (!value) {
-    return {};
-  }
-
-  try {
-    const url = new URL(value);
-    return {
-      code: url.searchParams.get('code') ?? undefined,
-      state: url.searchParams.get('state') ?? undefined,
-    };
-  } catch {
-    // Ignore malformed URLs and fall back below.
-  }
-
-  if (value.includes('#')) {
-    const [code, state] = value.split('#', 2);
-    return { code, state };
-  }
-
-  if (value.includes('code=')) {
-    const params = new URLSearchParams(value);
-    return {
-      code: params.get('code') ?? undefined,
-      state: params.get('state') ?? undefined,
-    };
-  }
-
-  return { code: value };
-}
-
-function startOpenAICodexCallbackServer(expectedState) {
-  let lastCode = null;
-  let lastCallbackUrl = null;
-  let cancelled = false;
-  const server = http.createServer((req, res) => {
-    try {
-      const url = new URL(req.url || '', 'http://localhost');
-      if (url.pathname !== '/auth/callback') {
-        res.statusCode = 404;
-        res.end('Not found');
-        return;
-      }
-      if (url.searchParams.get('state') !== expectedState) {
-        res.statusCode = 400;
-        res.end('State mismatch');
-        return;
-      }
-
-      const code = url.searchParams.get('code');
-      if (!code) {
-        res.statusCode = 400;
-        res.end('Missing authorization code');
-        return;
-      }
-
-      lastCode = code;
-      lastCallbackUrl = `${OPENAI_CODEX_REDIRECT_URI}?${url.searchParams.toString()}`;
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(OPENAI_CODEX_SUCCESS_HTML);
-    } catch {
-      res.statusCode = 500;
-      res.end('Internal error');
-    }
-  });
-
-  return new Promise((resolve) => {
-    server
-      .listen(1455, '127.0.0.1', () => {
-        resolve({
-          close: () => server.close(),
-          cancelWait: () => {
-            cancelled = true;
-          },
-          waitForCode: async () => {
-            const startedAt = Date.now();
-            while (Date.now() - startedAt < 600_000) {
-              if (lastCode) {
-                return { code: lastCode, callbackUrl: lastCallbackUrl };
-              }
-              if (cancelled) {
-                return null;
-              }
-              await sleep(100);
-            }
-            return null;
-          },
-        });
-      })
-      .on('error', (err) => {
-        emit('progress', {
-          provider: 'openai-codex',
-          message: `Local callback unavailable (${err.code || 'listen-failed'}). Waiting for pasted redirect URL...`,
-        });
-        resolve({
-          close: () => {
-            try {
-              server.close();
-            } catch {
-              // Ignore close errors.
-            }
-          },
-          cancelWait: () => {},
-          waitForCode: async () => null,
-        });
-      });
-  });
-}
-
-async function exchangeOpenAICodexAuthorizationCode(code, verifier) {
-  const maxAttempts = 3;
-  let lastError = 'Token exchange failed';
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    let response;
-    try {
-      response = await fetch(OPENAI_CODEX_TOKEN_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: OPENAI_CODEX_CLIENT_ID,
-          code,
-          code_verifier: verifier,
-          redirect_uri: OPENAI_CODEX_REDIRECT_URI,
-        }),
-      });
-    } catch (error) {
-      const detail = extractFailure(error);
-      if (attempt === maxAttempts) {
-        return { ok: false, error: `Token exchange failed: ${detail.message}` };
-      }
-      await sleep(250 * attempt);
-      continue;
-    }
-
-    const text = await response.text().catch(() => '');
-    let payload = null;
-    if (text) {
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        payload = null;
-      }
-    }
-
-    if (!response.ok) {
-      const detail =
-        payload?.error_description
-        || payload?.error
-        || text
-        || response.statusText
-        || `HTTP ${response.status}`;
-      lastError = `Token exchange failed (${response.status}): ${detail}`;
-      if (response.status >= 500 || response.status === 429) {
-        if (attempt < maxAttempts) {
-          await sleep(250 * attempt);
-          continue;
-        }
-      }
-      return { ok: false, error: lastError };
-    }
-
-    if (!payload?.access_token || !payload?.refresh_token || typeof payload?.expires_in !== 'number') {
-      lastError = 'Token exchange failed: OAuth token response was missing required fields';
-      if (attempt < maxAttempts) {
-        await sleep(250 * attempt);
-        continue;
-      }
-      return { ok: false, error: lastError };
-    }
-
-    return {
-      ok: true,
-      token: {
-        access: payload.access_token,
-        refresh: payload.refresh_token,
-        expires: Date.now() + payload.expires_in * 1000,
-      },
-    };
-  }
-
-  return { ok: false, error: lastError };
 }
 
 function minimaxEndpoints(region) {
@@ -679,86 +429,56 @@ async function runQwen() {
 
 async function runOpenAICodex() {
   attachPromptInputBridge();
-  // Keep the runtime module lookup so we fail early if the managed OpenClaw runtime
-  // does not contain the OAuth implementation Clawy expects.
-  await loadCodexOAuthModule();
+  const oauthModule = await loadCodexOAuthModule();
+  const loginOpenAICodex = oauthModule?.loginOpenAICodex;
+  if (typeof loginOpenAICodex !== 'function') {
+    throw new Error('OpenAI Codex OAuth helper is unavailable in the managed OpenClaw runtime.');
+  }
 
   const preflight = await runOpenAICodexTlsPreflight();
   if (!preflight.ok) {
     throw new Error(formatOpenAICodexTlsFix(preflight));
   }
-
-  const { verifier, state, url } = createOpenAICodexAuthorizationFlow('pi');
-  const server = await startOpenAICodexCallbackServer(state);
-
-  emit('open-url', { url });
-  emit('code', {
-    provider: 'openai-codex',
-    authKind: 'browser-callback',
-    verificationUri: url,
-    expiresIn: 600,
-    instructions:
-      'Complete sign-in in your browser. If the callback does not finish automatically, paste the redirect URL below.',
-  });
-
-  let code = null;
-  try {
-    emit('progress', {
-      provider: 'openai-codex',
-      message: 'Waiting for browser callback…',
-    });
-
-    const result = await server.waitForCode();
-    if (result?.code) {
-      code = result.code;
-    }
-
-    if (!code) {
+  const token = await loginOpenAICodex({
+    originator: 'pi',
+    onAuth: ({ url, instructions }) => {
+      emit('open-url', { url });
+      emit('code', {
+        provider: 'openai-codex',
+        authKind: 'browser-callback',
+        verificationUri: url,
+        expiresIn: 600,
+        instructions:
+          instructions
+          || 'Complete sign-in in your browser. If the callback does not finish automatically, paste the redirect URL below.',
+      });
+    },
+    onPrompt: async ({ message, placeholder }) => {
       emit('prompt', {
         provider: 'openai-codex',
-        message: 'Paste the authorization code (or full redirect URL):',
-        placeholder: 'http://localhost:1455/auth/callback?code=...',
+        message: message || 'Paste the authorization code (or full redirect URL):',
+        placeholder: placeholder || 'http://localhost:1455/auth/callback?code=...',
       });
-      const input = await waitForPromptInput();
-      const parsed = parseAuthorizationInput(input);
-      if (parsed.state && parsed.state !== state) {
-        throw new Error('State mismatch');
-      }
-      code = parsed.code ?? null;
-    }
+      return waitForPromptInput();
+    },
+    onProgress: (message) => {
+      emit('progress', {
+        provider: 'openai-codex',
+        message: message || 'Waiting for browser callback…',
+      });
+    },
+  });
 
-    if (!code) {
-      throw new Error('Missing authorization code');
-    }
-
-    emit('progress', {
-      provider: 'openai-codex',
-      message: 'Exchanging authorization code…',
-    });
-
-    const exchange = await exchangeOpenAICodexAuthorizationCode(code, verifier);
-    if (!exchange.ok) {
-      throw new Error(exchange.error);
-    }
-
-    const accountId = extractOpenAICodexAccountId(exchange.token.access);
-    if (!accountId) {
-      throw new Error('Failed to extract accountId from token');
-    }
-
-    emit('success', {
-      provider: 'openai-codex',
-      token: {
-        access: exchange.token.access,
-        refresh: exchange.token.refresh,
-        expires: exchange.token.expires,
-        accountId,
-        api: 'openai-codex-responses',
-      },
-    });
-  } finally {
-    server.close();
-  }
+  emit('success', {
+    provider: 'openai-codex',
+    token: {
+      access: token.access,
+      refresh: token.refresh,
+      expires: token.expires,
+      accountId: token.accountId,
+      api: 'openai-codex-responses',
+    },
+  });
 }
 
 async function main() {
