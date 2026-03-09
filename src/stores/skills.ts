@@ -151,7 +151,10 @@ interface SkillsState {
 
   // Actions
   fetchSkills: () => Promise<void>;
-  searchSkills: (query: string) => Promise<void>;
+  searchSkills: (
+    query: string,
+    options?: { auto?: boolean; force?: boolean; silent?: boolean }
+  ) => Promise<void>;
   installSkill: (slug: string, version?: string) => Promise<void>;
   uninstallSkill: (slug: string) => Promise<void>;
   enableSkill: (skillId: string) => Promise<void>;
@@ -258,15 +261,22 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     }
   },
 
-  searchSkills: async (query: string) => {
+  searchSkills: async (query: string, options = {}) => {
     const normalizedQuery = query.trim();
-    const cached = getCachedMarketplaceResults(normalizedQuery);
+    const cached = getCachedMarketplaceResults(normalizedQuery, Boolean(options.auto));
     if (cached) {
       set({
         searchResults: cached.results,
         searchError: null,
         searching: false,
       });
+      if (!options.force) {
+        return;
+      }
+    }
+
+    if (options.auto) {
+      set({ searchError: null, searching: false });
       return;
     }
 
@@ -297,7 +307,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       const fallbackResults = getCachedMarketplaceResults(normalizedQuery, true)?.results;
 
       set({
-        searchError: fallbackResults?.length ? null : normalizedError,
+        searchError: options.silent || fallbackResults?.length ? null : normalizedError,
         searchResults: fallbackResults?.length ? fallbackResults : get().searchResults,
       });
     } finally {
