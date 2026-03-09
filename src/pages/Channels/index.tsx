@@ -3,7 +3,7 @@ import { desktopApi } from '@/lib/desktop/api';
  * Channels Page
  * Manage messaging channel connections with configuration UI
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type SVGProps } from 'react';
 import {
   Plus,
   Radio,
@@ -23,6 +23,12 @@ import {
   CheckCircle,
   ShieldCheck,
 } from 'lucide-react';
+import {
+  SiDiscord,
+  SiElement,
+  SiTelegram,
+  SiWhatsapp,
+} from '@icons-pack/react-simple-icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -49,6 +55,55 @@ import {
 } from '@/types/channel';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+
+function DingTalkBrandIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        fill="currentColor"
+        d="M19.27 4.65c-.33-.18-.72-.2-1.07-.05L6.66 9.42a1 1 0 0 0 .08 1.87l3.76 1.17 1.16 3.78a1 1 0 0 0 1.86.1l4.85-11.53a1.02 1.02 0 0 0-.1-1.16Zm-6.1 8.88-.64-2.08a1 1 0 0 0-.66-.66l-2.07-.64 6.57-2.77-3.2 6.15Z"
+      />
+      <path
+        fill="currentColor"
+        d="m10.52 17.77-.96 1.97a1 1 0 0 1-.91.56 1 1 0 0 1-.92-.61l-.55-1.36a1 1 0 0 1 .56-1.3l1.95-.8a.99.99 0 0 1 1.3.58.97.97 0 0 1-.03.96Z"
+      />
+    </svg>
+  );
+}
+
+function LarkBrandIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path
+        fill="currentColor"
+        d="M12.9 2.58a1 1 0 0 0-1.53.2L6.8 10.15a1 1 0 0 0 .86 1.55h3.18l-2.98 4.93a1 1 0 0 0 1.4 1.35l7.9-5.08a1 1 0 0 0-.55-1.84h-3.16l2.95-6.7a1 1 0 0 0-1.5-1.78L12.9 2.58Z"
+      />
+    </svg>
+  );
+}
+
+function renderChannelBrandIcon(type: ChannelType, className: string) {
+  switch (type) {
+    case 'telegram':
+      return <SiTelegram className={className} style={{ color: '#26A5E4' }} />;
+    case 'discord':
+      return <SiDiscord className={className} style={{ color: '#5865F2' }} />;
+    case 'whatsapp':
+      return <SiWhatsapp className={className} style={{ color: '#25D366' }} />;
+    case 'matrix':
+      return <SiElement className={className} style={{ color: '#0DBD8B' }} />;
+    case 'dingtalk':
+      return <DingTalkBrandIcon className={className} style={{ color: '#1677FF' }} />;
+    case 'feishu':
+      return <LarkBrandIcon className={className} style={{ color: '#00B96B' }} />;
+    default:
+      return (
+        <span className={className.includes('h-7') ? 'text-2xl' : 'text-3xl'}>
+          {CHANNEL_ICONS[type]}
+        </span>
+      );
+  }
+}
 
 export function Channels() {
   const { t } = useTranslation('channels');
@@ -244,7 +299,9 @@ export function Channels() {
                     setShowAddDialog(true);
                   }}
                 >
-                  <span className="text-3xl">{meta.icon}</span>
+                  <span className="inline-flex h-8 w-8 items-center justify-center">
+                    {renderChannelBrandIcon(type, 'h-8 w-8')}
+                  </span>
                   <p className="font-medium mt-2">{meta.name}</p>
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
                     {meta.description}
@@ -316,8 +373,8 @@ function ChannelCard({ channel, onDelete }: ChannelCardProps) {
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
-            <span className="text-2xl">
-              {CHANNEL_ICONS[channel.type]}
+            <span className="inline-flex h-8 w-8 items-center justify-center">
+              {renderChannelBrandIcon(channel.type, 'h-7 w-7')}
             </span>
             <div>
               <CardTitle className="text-base">{channel.name}</CardTitle>
