@@ -7,7 +7,7 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256, Sha512};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -6951,13 +6951,30 @@ fn bundled_node_path() -> PathBuf {
     bundled_binary_path(binary_name)
 }
 
-fn find_command_path(command: &str) -> Option<PathBuf> {
+fn well_known_binary_dirs_for_command(command: &str) -> Vec<PathBuf> {
+    if cfg!(target_os = "macos") && command == "node" {
+        return vec![
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+        ];
+    }
+
+    Vec::new()
+}
+
+fn find_command_path_with_fallbacks(command: &str, extra_dirs: &[PathBuf]) -> Option<PathBuf> {
     let command_path = Path::new(command);
     if command_path.components().count() > 1 || command_path.is_absolute() {
         return command_path.is_file().then(|| command_path.to_path_buf());
     }
 
-    let search_path = std::env::var_os("PATH")?;
+    let mut directories = Vec::new();
+    if let Some(search_path) = std::env::var_os("PATH") {
+        directories.extend(std::env::split_paths(&search_path));
+    }
+    directories.extend(extra_dirs.iter().cloned());
+
+    let mut seen_directories = HashSet::new();
     let candidate_suffixes = if cfg!(windows) && command_path.extension().is_none() {
         std::env::var("PATHEXT")
             .ok()
@@ -6974,7 +6991,10 @@ fn find_command_path(command: &str) -> Option<PathBuf> {
         vec![String::new()]
     };
 
-    for directory in std::env::split_paths(&search_path) {
+    for directory in directories {
+        if !seen_directories.insert(directory.clone()) {
+            continue;
+        }
         for suffix in &candidate_suffixes {
             let candidate = if suffix.is_empty() {
                 directory.join(command)
@@ -6989,6 +7009,11 @@ fn find_command_path(command: &str) -> Option<PathBuf> {
     }
 
     None
+}
+
+fn find_command_path(command: &str) -> Option<PathBuf> {
+    let extra_dirs = well_known_binary_dirs_for_command(command);
+    find_command_path_with_fallbacks(command, &extra_dirs)
 }
 
 fn managed_uv_download_target() -> Result<(&'static str, &'static str), String> {
@@ -11509,6 +11534,26 @@ mod tests {
             resolution.diagnostics[0].path.as_deref(),
             Some(system_node.as_path())
         );
+    }
+
+    #[test]
+    fn find_command_path_uses_fallback_directories_when_path_is_empty() {
+        let test_dir = TestDir::new("find-command-path-fallback");
+        let fallback_dir = test_dir.path().join("opt-homebrew-bin");
+        fs::create_dir_all(&fallback_dir).expect("create fallback dir");
+        let node_binary = create_fake_node_binary(&fallback_dir, "node", "25.6.1", true);
+
+        let original_path = std::env::var_os("PATH");
+        std::env::remove_var("PATH");
+
+        let detected = find_command_path_with_fallbacks("node", &[fallback_dir]);
+
+        match original_path {
+            Some(path) => std::env::set_var("PATH", path),
+            None => std::env::remove_var("PATH"),
+        }
+
+        assert_eq!(detected.as_deref(), Some(node_binary.as_path()));
     }
 
     #[test]
