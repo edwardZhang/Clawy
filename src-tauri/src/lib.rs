@@ -25,7 +25,7 @@ use uuid::Uuid;
 const DEFAULT_GATEWAY_PORT: u16 = 18_789;
 const DEFAULT_GATEWAY_SCOPES: [&str; 1] = ["operator.admin"];
 const VISION_MIME_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/bmp", "image/webp"];
-const SUPPORTED_NODE_VERSION_RANGE: &str = ">=24.8.0, <25.0.0";
+const SUPPORTED_NODE_VERSION_RANGE: &str = ">=22.0.0, <26.0.0";
 const RECOMMENDED_MANAGED_NODE_VERSION: &str = "24.8.0";
 const MANAGED_UV_VERSION: &str = "0.10.0";
 const NODE_SMOKE_TEST_SCRIPT: &str = "process.stdout.write('clawy-node-smoke')";
@@ -11514,7 +11514,7 @@ mod tests {
     #[test]
     fn node_binary_resolution_rejects_unsupported_system_node_and_falls_back() {
         let test_dir = TestDir::new("node-resolution-fallback-version");
-        let system_node = create_fake_node_binary(test_dir.path(), "system-node", "24.7.9", true);
+        let system_node = create_fake_node_binary(test_dir.path(), "system-node", "26.0.0", true);
         let bundled_node = create_fake_node_binary(test_dir.path(), "bundled-node", "24.8.0", true);
 
         let resolution =
@@ -11527,7 +11527,7 @@ mod tests {
             resolution.diagnostics[0].reason,
             Some(NodeBinaryDiagnosticReason::UnsupportedVersion)
         );
-        assert_eq!(resolution.diagnostics[0].version.as_deref(), Some("24.7.9"));
+        assert_eq!(resolution.diagnostics[0].version.as_deref(), Some("26.0.0"));
         assert_eq!(
             resolution.diagnostics[1].status,
             NodeBinaryDiagnosticStatus::Accepted
@@ -11535,6 +11535,29 @@ mod tests {
         assert_eq!(
             resolution.diagnostics[1].path.as_deref(),
             Some(bundled_node.as_path())
+        );
+    }
+
+    #[test]
+    fn node_binary_resolution_accepts_supported_newer_system_node() {
+        let test_dir = TestDir::new("node-resolution-system-25");
+        let system_node = create_fake_node_binary(test_dir.path(), "system-node", "25.6.1", true);
+        let bundled_node = create_fake_node_binary(test_dir.path(), "bundled-node", "24.8.0", true);
+
+        let resolution =
+            resolve_node_binary_with_candidates(Some(system_node.clone()), bundled_node);
+
+        assert_eq!(resolution.path, Some(system_node.clone()));
+        assert_eq!(resolution.source, Some(NodeBinarySource::Path));
+        assert_eq!(resolution.version.as_deref(), Some("25.6.1"));
+        assert_eq!(resolution.diagnostics.len(), 1);
+        assert_eq!(
+            resolution.diagnostics[0].status,
+            NodeBinaryDiagnosticStatus::Accepted
+        );
+        assert_eq!(
+            resolution.diagnostics[0].path.as_deref(),
+            Some(system_node.as_path())
         );
     }
 
