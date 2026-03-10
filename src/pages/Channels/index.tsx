@@ -55,21 +55,7 @@ import {
 } from '@/types/channel';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
-
-function DingTalkBrandIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <path
-        fill="currentColor"
-        d="M19.27 4.65c-.33-.18-.72-.2-1.07-.05L6.66 9.42a1 1 0 0 0 .08 1.87l3.76 1.17 1.16 3.78a1 1 0 0 0 1.86.1l4.85-11.53a1.02 1.02 0 0 0-.1-1.16Zm-6.1 8.88-.64-2.08a1 1 0 0 0-.66-.66l-2.07-.64 6.57-2.77-3.2 6.15Z"
-      />
-      <path
-        fill="currentColor"
-        d="m10.52 17.77-.96 1.97a1 1 0 0 1-.91.56 1 1 0 0 1-.92-.61l-.55-1.36a1 1 0 0 1 .56-1.3l1.95-.8a.99.99 0 0 1 1.3.58.97.97 0 0 1-.03.96Z"
-      />
-    </svg>
-  );
-}
+import dingTalkIconUrl from '../../../resources/dingtalk.svg';
 
 function LarkBrandIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -93,7 +79,13 @@ function renderChannelBrandIcon(type: ChannelType, className: string) {
     case 'matrix':
       return <SiElement className={className} style={{ color: '#0DBD8B' }} />;
     case 'dingtalk':
-      return <DingTalkBrandIcon className={className} style={{ color: '#1677FF' }} />;
+      return (
+        <img
+          src={dingTalkIconUrl}
+          alt="DingTalk"
+          className={`${className} object-contain`}
+        />
+      );
     case 'feishu':
       return <LarkBrandIcon className={className} style={{ color: '#00B96B' }} />;
     default:
