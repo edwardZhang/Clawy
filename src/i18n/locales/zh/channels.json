@@ -52,14 +52,76 @@
         "saveAndConnect": "保存并连接",
         "envVar": "环境变量: {{var}}",
         "pluginStatus": {
-            "loading": "正在检查 Matrix 插件状态...",
-            "matrixMissing": "Matrix 插件尚未安装。保存此频道时，Clawy 会自动安装它。",
-            "matrixDisabled": "Matrix 插件已安装但未启用。保存此频道时，Clawy 会自动启用它。",
-            "matrixLoaded": "Matrix 插件已可用。",
-            "matrixError": "Matrix 插件当前不可用。保存时会再次尝试修复插件。"
+            "loading": "正在检查 {{name}} 插件状态...",
+            "missing": "{{name}} 插件尚未安装。保存此频道时，Clawy 会自动安装它。",
+            "disabled": "{{name}} 插件已安装但未启用。保存此频道时，Clawy 会自动启用它。",
+            "loaded": "{{name}} 插件已可用。",
+            "error": "{{name}} 插件当前不可用。保存时会再次尝试修复插件。"
         }
     },
     "meta": {
+        "qqbot": {
+            "description": "通过 openclaw-china 插件连接 QQ 开放平台机器人",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "appId": {
+                    "label": "App ID",
+                    "placeholder": "QQ 机器人 App ID"
+                },
+                "clientSecret": {
+                    "label": "Client Secret",
+                    "placeholder": "QQ 机器人 Client Secret"
+                },
+                "dmPolicy": {
+                    "label": "私聊策略",
+                    "description": "决定谁可以主动私聊 QQ 机器人。"
+                },
+                "allowFrom": {
+                    "label": "私聊白名单",
+                    "placeholder": "user_openid_1\nuser_openid_2",
+                    "description": "每行一个允许的发送者标识。仅在白名单策略下使用。"
+                },
+                "groupPolicy": {
+                    "label": "群聊策略",
+                    "description": "控制机器人是否响应群聊消息。"
+                },
+                "groupAllowFrom": {
+                    "label": "群聊白名单",
+                    "placeholder": "group_openid_1\ngroup_openid_2",
+                    "description": "每行一个允许的群或会话标识。"
+                },
+                "requireMention": {
+                    "label": "仅在被提及时回复",
+                    "description": "开启后，群聊中只有 @ 机器人时才会回复。"
+                },
+                "autoSendLocalPathMedia": {
+                    "label": "自动发送本地媒体",
+                    "description": "允许插件把本地路径识别为媒体并自动上传发送。"
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "开启",
+                    "disabled": "关闭"
+                },
+                "dmPolicy": {
+                    "open": "允许所有私聊",
+                    "pairing": "需要配对审批",
+                    "allowlist": "仅白名单"
+                },
+                "groupPolicy": {
+                    "open": "允许所有群聊",
+                    "allowlist": "仅白名单",
+                    "disabled": "禁用群聊"
+                }
+            },
+            "instructions": [
+                "在 QQ 开放平台创建机器人应用并获取 App ID / Client Secret",
+                "保存时 Clawy 会自动安装 openclaw-china 的 qqbot 插件",
+                "根据需要设置私聊与群聊策略",
+                "保存后重启网关并在 QQ 中测试消息"
+            ]
+        },
         "telegram": {
             "description": "使用 @BotFather 提供的机器人令牌连接 Telegram",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/TjiGwxsMWi7hpDkDAQBc0ydMnEf#PL8ndvsEwoYVWIx1T4mcB1EvnSb",
@@ -150,6 +212,176 @@
                 "在钉钉开发者后台创建企业内部应用并开启 Stream 模式",
                 "填写 Client ID 和 Client Secret（必填）",
                 "根据你的应用配置按需填写 Robot Code / Corp ID / Agent ID"
+            ]
+        },
+        "wecom": {
+            "description": "通过 openclaw-china 插件连接企业微信智能机器人",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "mode": {
+                    "label": "连接模式",
+                    "description": "推荐使用长连接 ws 模式，无需公网回调。"
+                },
+                "botId": {
+                    "label": "Bot ID",
+                    "placeholder": "企业微信智能机器人 Bot ID"
+                },
+                "secret": {
+                    "label": "Secret",
+                    "placeholder": "企业微信智能机器人 Secret"
+                },
+                "webhookPath": {
+                    "label": "Webhook 路径",
+                    "placeholder": "/wecom"
+                },
+                "token": {
+                    "label": "Webhook Token",
+                    "placeholder": "企业微信回调 Token"
+                },
+                "encodingAESKey": {
+                    "label": "EncodingAESKey",
+                    "placeholder": "企业微信回调 EncodingAESKey"
+                },
+                "publicBaseUrl": {
+                    "label": "公网地址",
+                    "placeholder": "https://example.com"
+                },
+                "welcomeText": {
+                    "label": "欢迎语",
+                    "placeholder": "你好，我是企业微信机器人"
+                },
+                "dmPolicy": {
+                    "label": "私聊策略",
+                    "description": "决定谁可以主动私聊企业微信机器人。"
+                },
+                "allowFrom": {
+                    "label": "私聊白名单",
+                    "placeholder": "zhangsan\nlisi",
+                    "description": "每行一个企业微信用户 ID。"
+                },
+                "groupPolicy": {
+                    "label": "群聊策略",
+                    "description": "控制机器人在群聊中的响应范围。"
+                },
+                "groupAllowFrom": {
+                    "label": "群聊白名单",
+                    "placeholder": "chatid_1\nchatid_2",
+                    "description": "每行一个允许的群聊 chatid。"
+                },
+                "requireMention": {
+                    "label": "群聊必须 @ 机器人",
+                    "description": "关闭后，允许机器人响应群中的普通消息。"
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "开启",
+                    "disabled": "关闭"
+                },
+                "mode": {
+                    "ws": "长连接 (推荐)",
+                    "webhook": "Webhook 回调"
+                },
+                "dmPolicy": {
+                    "pairing": "需要配对审批",
+                    "allowlist": "仅白名单",
+                    "open": "允许所有私聊",
+                    "disabled": "禁用私聊"
+                },
+                "groupPolicy": {
+                    "open": "允许所有群聊",
+                    "allowlist": "仅白名单",
+                    "disabled": "禁用群聊"
+                }
+            },
+            "instructions": [
+                "在企业微信后台创建智能机器人并获取 Bot ID / Secret",
+                "推荐优先使用 ws 长连接模式；Webhook 模式需要配置公网回调",
+                "保存时 Clawy 会自动安装 openclaw-china 的 wecom 插件",
+                "保存后重启网关并在企业微信私聊或群聊中测试"
+            ]
+        },
+        "wecomApp": {
+            "description": "通过 openclaw-china 插件连接企业微信自建应用",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "corpId": {
+                    "label": "企业 ID (CorpID)",
+                    "placeholder": "wwxxxxxx"
+                },
+                "corpSecret": {
+                    "label": "应用 Secret",
+                    "placeholder": "企业微信应用 Secret"
+                },
+                "agentId": {
+                    "label": "Agent ID",
+                    "placeholder": "1000002"
+                },
+                "webhookPath": {
+                    "label": "Webhook 路径",
+                    "placeholder": "/wecom-app"
+                },
+                "token": {
+                    "label": "回调 Token",
+                    "placeholder": "企业微信回调 Token"
+                },
+                "encodingAESKey": {
+                    "label": "回调 EncodingAESKey",
+                    "placeholder": "企业微信回调 EncodingAESKey"
+                },
+                "apiBaseUrl": {
+                    "label": "API 基础地址",
+                    "placeholder": "https://qyapi.weixin.qq.com"
+                },
+                "welcomeText": {
+                    "label": "欢迎语",
+                    "placeholder": "你好，我是企业微信自建应用机器人"
+                },
+                "dmPolicy": {
+                    "label": "私聊策略",
+                    "description": "决定谁可以主动私聊自建应用机器人。"
+                },
+                "allowFrom": {
+                    "label": "私聊白名单",
+                    "placeholder": "zhangsan\nlisi",
+                    "description": "每行一个企业微信用户 ID。"
+                },
+                "groupPolicy": {
+                    "label": "群聊策略",
+                    "description": "控制机器人在群聊中的响应范围。"
+                },
+                "groupAllowFrom": {
+                    "label": "群聊白名单",
+                    "placeholder": "chatid_1\nchatid_2",
+                    "description": "每行一个允许的群聊 chatid。"
+                },
+                "requireMention": {
+                    "label": "群聊必须 @ 机器人",
+                    "description": "关闭后，允许机器人响应群中的普通消息。"
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "开启",
+                    "disabled": "关闭"
+                },
+                "dmPolicy": {
+                    "pairing": "需要配对审批",
+                    "allowlist": "仅白名单",
+                    "open": "允许所有私聊",
+                    "disabled": "禁用私聊"
+                },
+                "groupPolicy": {
+                    "open": "允许所有群聊",
+                    "allowlist": "仅白名单",
+                    "disabled": "禁用群聊"
+                }
+            },
+            "instructions": [
+                "在企业微信后台创建自建应用，获取 CorpID / Secret / AgentID",
+                "配置消息回调时需要 Webhook 路径、Token 和 EncodingAESKey",
+                "保存时 Clawy 会自动安装 openclaw-china 的 wecom-app 插件",
+                "保存后重启网关并在企业微信中测试私聊、群聊或主动推送"
             ]
         },
         "signal": {

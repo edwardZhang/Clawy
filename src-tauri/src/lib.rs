@@ -2051,14 +2051,7 @@ where
         let result = work(&app_handle, &state_handle);
         finish_setup_install(&state_handle);
         if let Err(error) = result {
-            emit_setup_install_progress(
-                &app_handle,
-                "failed",
-                "failed",
-                100.0,
-                None,
-                Some(error),
-            );
+            emit_setup_install_progress(&app_handle, "failed", "failed", 100.0, None, Some(error));
         }
     });
 }
@@ -5073,7 +5066,14 @@ fn spawn_clawhub_search_task(
                 } else {
                     parse_clawhub_search_results(&output)
                 };
-                emit_clawhub_search_result_event(&app, request_id, query, true, Some(results), None);
+                emit_clawhub_search_result_event(
+                    &app,
+                    request_id,
+                    query,
+                    true,
+                    Some(results),
+                    None,
+                );
             }
             Err(error) => {
                 emit_clawhub_search_result_event(&app, request_id, query, false, None, Some(error));
@@ -5423,6 +5423,24 @@ fn channel_plugin_policy(channel_type: &str) -> Option<ChannelPluginPolicy> {
             bundled_install_spec: Some("matrix"),
             npm_spec: Some("@openclaw/matrix"),
         }),
+        "qqbot" => Some(ChannelPluginPolicy {
+            plugin_id: "qqbot",
+            install_mode: ChannelPluginInstallMode::OpenClawCliManaged,
+            bundled_install_spec: None,
+            npm_spec: Some("@openclaw-china/qqbot"),
+        }),
+        "wecom" => Some(ChannelPluginPolicy {
+            plugin_id: "wecom",
+            install_mode: ChannelPluginInstallMode::OpenClawCliManaged,
+            bundled_install_spec: None,
+            npm_spec: Some("@openclaw-china/wecom"),
+        }),
+        "wecom-app" => Some(ChannelPluginPolicy {
+            plugin_id: "wecom-app",
+            install_mode: ChannelPluginInstallMode::OpenClawCliManaged,
+            bundled_install_spec: None,
+            npm_spec: Some("@openclaw-china/wecom-app"),
+        }),
         "dingtalk" => Some(ChannelPluginPolicy {
             plugin_id: "dingtalk",
             install_mode: ChannelPluginInstallMode::LegacyClawyManaged,
@@ -5555,24 +5573,26 @@ fn get_channel_plugin_status_value(channel_type: &str) -> Result<Value, String> 
 
 fn spawn_channel_plugin_status_task(app: &AppHandle, request_id: String, channel_type: String) {
     let app = app.clone();
-    thread::spawn(move || match get_channel_plugin_status_value(&channel_type) {
-        Ok(status) => emit_channel_plugin_status_event(
-            &app,
-            request_id,
-            channel_type,
-            true,
-            Some(status),
-            None,
-        ),
-        Err(error) => emit_channel_plugin_status_event(
-            &app,
-            request_id,
-            channel_type,
-            false,
-            None,
-            Some(error),
-        ),
-    });
+    thread::spawn(
+        move || match get_channel_plugin_status_value(&channel_type) {
+            Ok(status) => emit_channel_plugin_status_event(
+                &app,
+                request_id,
+                channel_type,
+                true,
+                Some(status),
+                None,
+            ),
+            Err(error) => emit_channel_plugin_status_event(
+                &app,
+                request_id,
+                channel_type,
+                false,
+                None,
+                Some(error),
+            ),
+        },
+    );
 }
 
 fn run_openclaw_cli_command(args: &[&str], label: &str) -> Result<String, String> {
@@ -5895,6 +5915,237 @@ fn parse_bool_form_value(raw: Option<&Value>, default: bool) -> bool {
             _ => None,
         })
         .unwrap_or(default)
+}
+
+fn parse_int_form_value(raw: Option<&Value>) -> Option<i64> {
+    raw.and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<i64>().ok())
+}
+
+fn trim_form_string(raw: Option<&Value>) -> Option<String> {
+    raw.and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn insert_trimmed_form_string(
+    transformed: &mut Map<String, Value>,
+    raw: &Map<String, Value>,
+    form_key: &str,
+    config_key: &str,
+) {
+    if let Some(value) = trim_form_string(raw.get(form_key)) {
+        transformed.insert(config_key.into(), Value::String(value));
+    }
+}
+
+fn join_saved_string_array(saved_obj: &Map<String, Value>, key: &str) -> String {
+    saved_obj
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<&str>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+fn saved_string(saved_obj: &Map<String, Value>, key: &str) -> Option<String> {
+    saved_obj
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+}
+
+fn qqbot_form_values_from_saved(saved_obj: &Map<String, Value>) -> Map<String, Value> {
+    let mut values = Map::new();
+
+    if let Some(app_id) = saved_string(saved_obj, "appId") {
+        values.insert("appId".into(), Value::String(app_id));
+    }
+    if let Some(client_secret) = saved_string(saved_obj, "clientSecret") {
+        values.insert("clientSecret".into(), Value::String(client_secret));
+    }
+
+    values.insert(
+        "dmPolicy".into(),
+        Value::String(
+            saved_obj
+                .get("dmPolicy")
+                .and_then(Value::as_str)
+                .unwrap_or("open")
+                .to_string(),
+        ),
+    );
+    values.insert(
+        "allowFrom".into(),
+        Value::String(join_saved_string_array(saved_obj, "allowFrom")),
+    );
+    values.insert(
+        "groupPolicy".into(),
+        Value::String(
+            saved_obj
+                .get("groupPolicy")
+                .and_then(Value::as_str)
+                .unwrap_or("open")
+                .to_string(),
+        ),
+    );
+    values.insert(
+        "groupAllowFrom".into(),
+        Value::String(join_saved_string_array(saved_obj, "groupAllowFrom")),
+    );
+    values.insert(
+        "requireMention".into(),
+        Value::String(
+            saved_obj
+                .get("requireMention")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+                .to_string(),
+        ),
+    );
+    values.insert(
+        "autoSendLocalPathMedia".into(),
+        Value::String(
+            saved_obj
+                .get("autoSendLocalPathMedia")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+                .to_string(),
+        ),
+    );
+
+    values
+}
+
+fn wecom_form_values_from_saved(saved_obj: &Map<String, Value>) -> Map<String, Value> {
+    let mut values = Map::new();
+
+    for key in [
+        "mode",
+        "botId",
+        "secret",
+        "webhookPath",
+        "token",
+        "encodingAESKey",
+        "publicBaseUrl",
+        "welcomeText",
+    ] {
+        if let Some(value) = saved_string(saved_obj, key) {
+            values.insert(key.into(), Value::String(value));
+        }
+    }
+
+    values.insert(
+        "dmPolicy".into(),
+        Value::String(
+            saved_obj
+                .get("dmPolicy")
+                .and_then(Value::as_str)
+                .unwrap_or("pairing")
+                .to_string(),
+        ),
+    );
+    values.insert(
+        "allowFrom".into(),
+        Value::String(join_saved_string_array(saved_obj, "allowFrom")),
+    );
+    values.insert(
+        "groupPolicy".into(),
+        Value::String(
+            saved_obj
+                .get("groupPolicy")
+                .and_then(Value::as_str)
+                .unwrap_or("open")
+                .to_string(),
+        ),
+    );
+    values.insert(
+        "groupAllowFrom".into(),
+        Value::String(join_saved_string_array(saved_obj, "groupAllowFrom")),
+    );
+    values.insert(
+        "requireMention".into(),
+        Value::String(
+            saved_obj
+                .get("requireMention")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+                .to_string(),
+        ),
+    );
+
+    values
+}
+
+fn wecom_app_form_values_from_saved(saved_obj: &Map<String, Value>) -> Map<String, Value> {
+    let mut values = Map::new();
+
+    for key in [
+        "corpId",
+        "corpSecret",
+        "webhookPath",
+        "token",
+        "encodingAESKey",
+        "apiBaseUrl",
+        "welcomeText",
+    ] {
+        if let Some(value) = saved_string(saved_obj, key) {
+            values.insert(key.into(), Value::String(value));
+        }
+    }
+
+    if let Some(agent_id) = saved_obj.get("agentId").and_then(Value::as_i64) {
+        values.insert("agentId".into(), Value::String(agent_id.to_string()));
+    }
+
+    values.insert(
+        "dmPolicy".into(),
+        Value::String(
+            saved_obj
+                .get("dmPolicy")
+                .and_then(Value::as_str)
+                .unwrap_or("pairing")
+                .to_string(),
+        ),
+    );
+    values.insert(
+        "allowFrom".into(),
+        Value::String(join_saved_string_array(saved_obj, "allowFrom")),
+    );
+    values.insert(
+        "groupPolicy".into(),
+        Value::String(
+            saved_obj
+                .get("groupPolicy")
+                .and_then(Value::as_str)
+                .unwrap_or("open")
+                .to_string(),
+        ),
+    );
+    values.insert(
+        "groupAllowFrom".into(),
+        Value::String(join_saved_string_array(saved_obj, "groupAllowFrom")),
+    );
+    values.insert(
+        "requireMention".into(),
+        Value::String(
+            saved_obj
+                .get("requireMention")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+                .to_string(),
+        ),
+    );
+
+    values
 }
 
 fn matrix_room_reply_mode_value(raw: Option<&Value>) -> String {
@@ -6289,6 +6540,119 @@ fn transform_channel_config(
                 matrix_groups_from_form(raw, existing_obj, &group_policy, &room_reply_mode),
             );
         }
+        "qqbot" => {
+            insert_trimmed_form_string(&mut transformed, raw, "appId", "appId");
+            insert_trimmed_form_string(&mut transformed, raw, "clientSecret", "clientSecret");
+            transformed.insert(
+                "dmPolicy".into(),
+                Value::String(
+                    trim_form_string(raw.get("dmPolicy")).unwrap_or_else(|| "open".into()),
+                ),
+            );
+            transformed.insert(
+                "allowFrom".into(),
+                Value::Array(parse_string_list_form_value(raw.get("allowFrom"))),
+            );
+            transformed.insert(
+                "groupPolicy".into(),
+                Value::String(
+                    trim_form_string(raw.get("groupPolicy")).unwrap_or_else(|| "open".into()),
+                ),
+            );
+            transformed.insert(
+                "groupAllowFrom".into(),
+                Value::Array(parse_string_list_form_value(raw.get("groupAllowFrom"))),
+            );
+            transformed.insert(
+                "requireMention".into(),
+                Value::Bool(parse_bool_form_value(raw.get("requireMention"), true)),
+            );
+            transformed.insert(
+                "autoSendLocalPathMedia".into(),
+                Value::Bool(parse_bool_form_value(
+                    raw.get("autoSendLocalPathMedia"),
+                    true,
+                )),
+            );
+        }
+        "wecom" => {
+            for key in [
+                "mode",
+                "botId",
+                "secret",
+                "webhookPath",
+                "token",
+                "encodingAESKey",
+                "publicBaseUrl",
+                "welcomeText",
+            ] {
+                insert_trimmed_form_string(&mut transformed, raw, key, key);
+            }
+            transformed.insert(
+                "dmPolicy".into(),
+                Value::String(
+                    trim_form_string(raw.get("dmPolicy")).unwrap_or_else(|| "pairing".into()),
+                ),
+            );
+            transformed.insert(
+                "allowFrom".into(),
+                Value::Array(parse_string_list_form_value(raw.get("allowFrom"))),
+            );
+            transformed.insert(
+                "groupPolicy".into(),
+                Value::String(
+                    trim_form_string(raw.get("groupPolicy")).unwrap_or_else(|| "open".into()),
+                ),
+            );
+            transformed.insert(
+                "groupAllowFrom".into(),
+                Value::Array(parse_string_list_form_value(raw.get("groupAllowFrom"))),
+            );
+            transformed.insert(
+                "requireMention".into(),
+                Value::Bool(parse_bool_form_value(raw.get("requireMention"), true)),
+            );
+        }
+        "wecom-app" => {
+            for key in [
+                "corpId",
+                "corpSecret",
+                "webhookPath",
+                "token",
+                "encodingAESKey",
+                "apiBaseUrl",
+                "welcomeText",
+            ] {
+                insert_trimmed_form_string(&mut transformed, raw, key, key);
+            }
+            if let Some(agent_id) = parse_int_form_value(raw.get("agentId")) {
+                transformed.insert("agentId".into(), Value::Number(agent_id.into()));
+            }
+            transformed.insert(
+                "dmPolicy".into(),
+                Value::String(
+                    trim_form_string(raw.get("dmPolicy")).unwrap_or_else(|| "pairing".into()),
+                ),
+            );
+            transformed.insert(
+                "allowFrom".into(),
+                Value::Array(parse_string_list_form_value(raw.get("allowFrom"))),
+            );
+            transformed.insert(
+                "groupPolicy".into(),
+                Value::String(
+                    trim_form_string(raw.get("groupPolicy")).unwrap_or_else(|| "open".into()),
+                ),
+            );
+            transformed.insert(
+                "groupAllowFrom".into(),
+                Value::Array(parse_string_list_form_value(raw.get("groupAllowFrom"))),
+            );
+            transformed.insert(
+                "requireMention".into(),
+                Value::Bool(parse_bool_form_value(raw.get("requireMention"), true)),
+            );
+        }
         _ => {
             transformed.extend(raw.clone());
         }
@@ -6426,6 +6790,12 @@ fn get_channel_form_values_value(channel_type: &str) -> Result<Value, String> {
         }
     } else if channel_type == "matrix" {
         values.extend(matrix_form_values_from_saved(saved_obj));
+    } else if channel_type == "qqbot" {
+        values.extend(qqbot_form_values_from_saved(saved_obj));
+    } else if channel_type == "wecom" {
+        values.extend(wecom_form_values_from_saved(saved_obj));
+    } else if channel_type == "wecom-app" {
+        values.extend(wecom_app_form_values_from_saved(saved_obj));
     } else {
         for (key, value) in saved_obj {
             if key == "enabled" {
@@ -8737,6 +9107,67 @@ fn validate_channel_credentials_value(
     match channel_type {
         "discord" => validate_discord_credentials(config),
         "telegram" => validate_telegram_credentials(config),
+        "qqbot" => {
+            let mut errors = Vec::new();
+            if trim_form_string(config.get("appId")).is_none() {
+                errors.push("App ID is required.".to_string());
+            }
+            if trim_form_string(config.get("clientSecret")).is_none() {
+                errors.push("Client Secret is required.".to_string());
+            }
+            Ok(json!({
+                "valid": errors.is_empty(),
+                "errors": errors,
+                "warnings": ["Online verification is not available. Clawy only checked the required QQ Bot fields."],
+            }))
+        }
+        "wecom" => {
+            let mut errors = Vec::new();
+            let mode = trim_form_string(config.get("mode")).unwrap_or_else(|| "ws".into());
+            if mode == "webhook" {
+                if trim_form_string(config.get("token")).is_none() {
+                    errors.push("Webhook mode requires Token.".to_string());
+                }
+                if trim_form_string(config.get("encodingAESKey")).is_none() {
+                    errors.push("Webhook mode requires EncodingAESKey.".to_string());
+                }
+            } else {
+                if trim_form_string(config.get("botId")).is_none() {
+                    errors.push("WS mode requires Bot ID.".to_string());
+                }
+                if trim_form_string(config.get("secret")).is_none() {
+                    errors.push("WS mode requires Secret.".to_string());
+                }
+            }
+            Ok(json!({
+                "valid": errors.is_empty(),
+                "errors": errors,
+                "warnings": ["Online verification is not available. Clawy only checked the required WeCom fields for the selected mode."],
+            }))
+        }
+        "wecom-app" => {
+            let mut errors = Vec::new();
+            if trim_form_string(config.get("corpId")).is_none() {
+                errors.push("Corp ID is required.".to_string());
+            }
+            if trim_form_string(config.get("corpSecret")).is_none() {
+                errors.push("App Secret is required.".to_string());
+            }
+            if parse_int_form_value(config.get("agentId")).is_none() {
+                errors.push("Agent ID must be a number.".to_string());
+            }
+            if trim_form_string(config.get("token")).is_none() {
+                errors.push("Callback Token is required.".to_string());
+            }
+            if trim_form_string(config.get("encodingAESKey")).is_none() {
+                errors.push("Callback EncodingAESKey is required.".to_string());
+            }
+            Ok(json!({
+                "valid": errors.is_empty(),
+                "errors": errors,
+                "warnings": ["Online verification is not available. Clawy only checked the required WeCom App fields."],
+            }))
+        }
         _ => Ok(json!({
             "valid": true,
             "errors": [],
@@ -10083,7 +10514,9 @@ fn invoke_ipc(
         }
         "update:version" => Ok(json!(app.package_info().version.to_string())),
         "update:checkAsync" => match spawn_update_check_task(&app, &state) {
-            Ok(started) => Ok(json!({ "success": true, "started": started, "alreadyRunning": !started })),
+            Ok(started) => {
+                Ok(json!({ "success": true, "started": started, "alreadyRunning": !started }))
+            }
             Err(error) => {
                 let status = set_update_status(&app, &state, |status| {
                     status.status = "error".into();
@@ -10119,7 +10552,9 @@ fn invoke_ipc(
             }
         },
         "update:downloadAsync" => match spawn_update_download_task(&app, &state) {
-            Ok(started) => Ok(json!({ "success": true, "started": started, "alreadyRunning": !started })),
+            Ok(started) => {
+                Ok(json!({ "success": true, "started": started, "alreadyRunning": !started }))
+            }
             Err(error) => {
                 if let Ok(mut runtime) = state.updater_runtime.lock() {
                     runtime.is_downloading = false;
@@ -11145,6 +11580,21 @@ mod tests {
     }
 
     #[test]
+    fn china_channel_policies_use_openclaw_cli_managed_npm_specs() {
+        let qqbot = channel_plugin_policy("qqbot").expect("qqbot policy");
+        assert_eq!(qqbot.bundled_install_spec, None);
+        assert_eq!(qqbot.npm_spec, Some("@openclaw-china/qqbot"));
+
+        let wecom = channel_plugin_policy("wecom").expect("wecom policy");
+        assert_eq!(wecom.bundled_install_spec, None);
+        assert_eq!(wecom.npm_spec, Some("@openclaw-china/wecom"));
+
+        let wecom_app = channel_plugin_policy("wecom-app").expect("wecom-app policy");
+        assert_eq!(wecom_app.bundled_install_spec, None);
+        assert_eq!(wecom_app.npm_spec, Some("@openclaw-china/wecom-app"));
+    }
+
+    #[test]
     fn matrix_runtime_dependencies_installed_requires_sdk_and_crypto_packages() {
         let plugin_root =
             std::env::temp_dir().join(format!("clawy-matrix-runtime-test-{}", std::process::id()));
@@ -11316,6 +11766,175 @@ mod tests {
         assert_eq!(
             values.get("groups").and_then(Value::as_str),
             Some("!room:example.org")
+        );
+    }
+
+    #[test]
+    fn transform_channel_config_qqbot_wecom_and_wecom_app_maps_form_fields() {
+        let qqbot_raw = json!({
+            "appId": "1024",
+            "clientSecret": "qq-secret",
+            "dmPolicy": "allowlist",
+            "allowFrom": "user_a\nuser_b",
+            "groupPolicy": "disabled",
+            "groupAllowFrom": "group_a",
+            "requireMention": "false",
+            "autoSendLocalPathMedia": "true"
+        });
+        let qqbot =
+            transform_channel_config("qqbot", qqbot_raw.as_object().expect("qqbot form"), None);
+        assert_eq!(qqbot.get("appId").and_then(Value::as_str), Some("1024"));
+        assert_eq!(
+            qqbot.get("clientSecret").and_then(Value::as_str),
+            Some("qq-secret")
+        );
+        assert_eq!(
+            qqbot.get("dmPolicy").and_then(Value::as_str),
+            Some("allowlist")
+        );
+        assert_eq!(
+            qqbot
+                .get("allowFrom")
+                .and_then(Value::as_array)
+                .map(|entries| entries.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
+            Some(vec!["user_a", "user_b"])
+        );
+        assert_eq!(
+            qqbot.get("requireMention").and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let wecom_raw = json!({
+            "mode": "ws",
+            "botId": "bot-id",
+            "secret": "wecom-secret",
+            "welcomeText": "hello",
+            "dmPolicy": "open",
+            "allowFrom": "zhangsan",
+            "groupPolicy": "allowlist",
+            "groupAllowFrom": "chat-1\nchat-2",
+            "requireMention": "true"
+        });
+        let wecom =
+            transform_channel_config("wecom", wecom_raw.as_object().expect("wecom form"), None);
+        assert_eq!(wecom.get("mode").and_then(Value::as_str), Some("ws"));
+        assert_eq!(wecom.get("botId").and_then(Value::as_str), Some("bot-id"));
+        assert_eq!(
+            wecom.get("secret").and_then(Value::as_str),
+            Some("wecom-secret")
+        );
+        assert_eq!(
+            wecom.get("groupPolicy").and_then(Value::as_str),
+            Some("allowlist")
+        );
+        assert_eq!(
+            wecom
+                .get("groupAllowFrom")
+                .and_then(Value::as_array)
+                .map(|entries| entries.iter().filter_map(Value::as_str).collect::<Vec<_>>()),
+            Some(vec!["chat-1", "chat-2"])
+        );
+
+        let wecom_app_raw = json!({
+            "corpId": "wwcorp",
+            "corpSecret": "corp-secret",
+            "agentId": "1000002",
+            "webhookPath": "/wecom-app",
+            "token": "token",
+            "encodingAESKey": "aes-key",
+            "dmPolicy": "pairing",
+            "groupPolicy": "open",
+            "requireMention": "false"
+        });
+        let wecom_app = transform_channel_config(
+            "wecom-app",
+            wecom_app_raw.as_object().expect("wecom-app form"),
+            None,
+        );
+        assert_eq!(
+            wecom_app.get("corpId").and_then(Value::as_str),
+            Some("wwcorp")
+        );
+        assert_eq!(
+            wecom_app.get("corpSecret").and_then(Value::as_str),
+            Some("corp-secret")
+        );
+        assert_eq!(
+            wecom_app.get("agentId").and_then(Value::as_i64),
+            Some(1000002)
+        );
+        assert_eq!(
+            wecom_app.get("requireMention").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn china_channel_form_values_from_saved_flattens_arrays_and_booleans() {
+        let qqbot_saved = json!({
+            "appId": "1024",
+            "clientSecret": "qq-secret",
+            "dmPolicy": "allowlist",
+            "allowFrom": ["user_a", "user_b"],
+            "groupPolicy": "open",
+            "groupAllowFrom": ["group_a"],
+            "requireMention": false,
+            "autoSendLocalPathMedia": true
+        });
+        let qqbot_values =
+            qqbot_form_values_from_saved(qqbot_saved.as_object().expect("qqbot saved"));
+        assert_eq!(
+            qqbot_values.get("allowFrom").and_then(Value::as_str),
+            Some("user_a\nuser_b")
+        );
+        assert_eq!(
+            qqbot_values.get("requireMention").and_then(Value::as_str),
+            Some("false")
+        );
+
+        let wecom_saved = json!({
+            "mode": "webhook",
+            "webhookPath": "/wecom",
+            "token": "token",
+            "encodingAESKey": "aes",
+            "allowFrom": ["zhangsan"],
+            "groupAllowFrom": ["chat_1", "chat_2"],
+            "requireMention": true
+        });
+        let wecom_values =
+            wecom_form_values_from_saved(wecom_saved.as_object().expect("wecom saved"));
+        assert_eq!(
+            wecom_values.get("mode").and_then(Value::as_str),
+            Some("webhook")
+        );
+        assert_eq!(
+            wecom_values.get("groupAllowFrom").and_then(Value::as_str),
+            Some("chat_1\nchat_2")
+        );
+
+        let wecom_app_saved = json!({
+            "corpId": "wwcorp",
+            "corpSecret": "corp-secret",
+            "agentId": 1000002,
+            "allowFrom": ["lisi"],
+            "groupPolicy": "disabled",
+            "requireMention": false
+        });
+        let wecom_app_values =
+            wecom_app_form_values_from_saved(wecom_app_saved.as_object().expect("wecom-app saved"));
+        assert_eq!(
+            wecom_app_values.get("agentId").and_then(Value::as_str),
+            Some("1000002")
+        );
+        assert_eq!(
+            wecom_app_values.get("allowFrom").and_then(Value::as_str),
+            Some("lisi")
+        );
+        assert_eq!(
+            wecom_app_values
+                .get("requireMention")
+                .and_then(Value::as_str),
+            Some("false")
         );
     }
 

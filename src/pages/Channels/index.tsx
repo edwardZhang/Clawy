@@ -296,7 +296,7 @@ export function Channels() {
                   </span>
                   <p className="font-medium mt-2">{meta.name}</p>
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                    {meta.description}
+                    {t(meta.description)}
                   </p>
                   {isConfigured && (
                     <Badge className="absolute top-2 right-2 text-xs bg-green-600 hover:bg-green-600">
@@ -418,6 +418,7 @@ interface ChannelPluginStatus {
 }
 
 type ConnectStage = 'validating' | 'installingPlugin' | 'saving';
+const PLUGIN_STATUS_CHANNEL_TYPES: ChannelType[] = ['matrix', 'dingtalk', 'qqbot', 'wecom', 'wecom-app'];
 
 function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded }: AddChannelDialogProps) {
   const { t } = useTranslation('channels');
@@ -505,10 +506,6 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
         return;
       }
 
-      if (event.channelType !== 'matrix') {
-        return;
-      }
-
       pluginStatusRequestIdRef.current = null;
 
       if (event.success && event.status) {
@@ -516,13 +513,13 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
       } else {
         setPluginStatus({
           required: true,
-          channelType: 'matrix',
-          pluginId: 'matrix',
+          channelType: event.channelType || '',
+          pluginId: event.channelType || undefined,
           installed: false,
           enabled: false,
           status: 'error',
           origin: 'unknown',
-          message: event.error || 'Failed to fetch Matrix plugin status',
+          message: event.error || 'Failed to fetch plugin status',
         });
       }
       setPluginStatusLoading(false);
@@ -536,7 +533,7 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
   }, []);
 
   useEffect(() => {
-    if (selectedType !== 'matrix') {
+    if (!selectedType || !PLUGIN_STATUS_CHANNEL_TYPES.includes(selectedType)) {
       pluginStatusRequestIdRef.current = null;
       setPluginStatus(null);
       setPluginStatusLoading(false);
@@ -545,7 +542,7 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
 
     let cancelled = false;
     setPluginStatusLoading(true);
-    const requestId = `matrix-plugin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const requestId = `${selectedType}-plugin-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     pluginStatusRequestIdRef.current = requestId;
 
     const timer = window.setTimeout(() => {
@@ -557,7 +554,7 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
             setPluginStatus({
               required: true,
               channelType: selectedType,
-              pluginId: 'matrix',
+              pluginId: selectedType,
               installed: false,
               enabled: false,
               status: 'error',
@@ -753,7 +750,7 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
 
       // Step 2: Save channel configuration via IPC
       const config: Record<string, unknown> = { ...configValues };
-      if (selectedType === 'matrix') {
+      if (selectedType && PLUGIN_STATUS_CHANNEL_TYPES.includes(selectedType)) {
         setConnectStage(pluginStatus?.status === 'loaded' ? 'saving' : 'installingPlugin');
       } else {
         setConnectStage('saving');
@@ -791,11 +788,11 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
 
       // Brief delay so user can see the success state before dialog closes
       await new Promise((resolve) => setTimeout(resolve, 800));
-      if (selectedType === 'matrix') {
+      if (selectedType && PLUGIN_STATUS_CHANNEL_TYPES.includes(selectedType)) {
         setPluginStatus({
           required: true,
-          channelType: 'matrix',
-          pluginId: 'matrix',
+          channelType: selectedType,
+          pluginId: selectedType,
           installed: true,
           enabled: true,
           status: 'loaded',
@@ -863,19 +860,23 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
   })();
 
   const pluginStatusMessage = (() => {
+    if (!selectedType || !pluginStatus?.required) {
+      return null;
+    }
+
     if (matrixNeedsInstallFromBundled) {
-      return t('dialog.pluginStatus.matrixMissing');
+      return t('dialog.pluginStatus.missing', { name: CHANNEL_NAMES[selectedType] });
     }
 
     switch (pluginStatus?.status) {
       case 'missing':
-        return t('dialog.pluginStatus.matrixMissing');
+        return t('dialog.pluginStatus.missing', { name: CHANNEL_NAMES[selectedType] });
       case 'disabled':
-        return t('dialog.pluginStatus.matrixDisabled');
+        return t('dialog.pluginStatus.disabled', { name: CHANNEL_NAMES[selectedType] });
       case 'loaded':
-        return t('dialog.pluginStatus.matrixLoaded');
+        return t('dialog.pluginStatus.loaded', { name: CHANNEL_NAMES[selectedType] });
       case 'error':
-        return pluginStatus.message || t('dialog.pluginStatus.matrixError');
+        return pluginStatus.message || t('dialog.pluginStatus.error', { name: CHANNEL_NAMES[selectedType] });
       default:
         return null;
     }
@@ -979,11 +980,11 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
               )}
 
               {/* Matrix plugin status */}
-              {selectedType === 'matrix' && (
+              {selectedType && PLUGIN_STATUS_CHANNEL_TYPES.includes(selectedType) && pluginStatus?.required && (
                 pluginStatusLoading ? (
                   <div className="bg-muted p-3 rounded-lg text-sm flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                    <span>{t('dialog.pluginStatus.loading')}</span>
+                    <span>{t('dialog.pluginStatus.loading', { name: CHANNEL_NAMES[selectedType] })}</span>
                   </div>
                 ) : pluginStatusMessage ? (
                   <div className={`p-3 rounded-lg text-sm flex items-start gap-2 ${pluginStatusTone}`}>

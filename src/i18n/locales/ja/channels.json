@@ -52,14 +52,76 @@
         "saveAndConnect": "保存して接続",
         "envVar": "環境変数: {{var}}",
         "pluginStatus": {
-            "loading": "Matrix プラグインの状態を確認しています...",
-            "matrixMissing": "Matrix プラグインはまだインストールされていません。このチャンネルを保存するときに Clawy が自動でインストールします。",
-            "matrixDisabled": "Matrix プラグインはインストール済みですが無効です。このチャンネルを保存するときに Clawy が自動で有効化します。",
-            "matrixLoaded": "Matrix プラグインは利用可能です。",
-            "matrixError": "Matrix プラグインは現在利用できません。保存時に再度セットアップを試みます。"
+            "loading": "{{name}} プラグインの状態を確認しています...",
+            "missing": "{{name}} プラグインはまだインストールされていません。このチャンネルを保存するときに Clawy が自動でインストールします。",
+            "disabled": "{{name}} プラグインはインストール済みですが無効です。このチャンネルを保存するときに Clawy が自動で有効化します。",
+            "loaded": "{{name}} プラグインは利用可能です。",
+            "error": "{{name}} プラグインは現在利用できません。保存時に再度セットアップを試みます。"
         }
     },
     "meta": {
+        "qqbot": {
+            "description": "openclaw-china プラグイン経由で QQ Bot に接続します",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "appId": {
+                    "label": "App ID",
+                    "placeholder": "QQ Bot App ID"
+                },
+                "clientSecret": {
+                    "label": "Client Secret",
+                    "placeholder": "QQ Bot Client Secret"
+                },
+                "dmPolicy": {
+                    "label": "DM ポリシー",
+                    "description": "誰が QQ ボットに DM を送れるかを決めます。"
+                },
+                "allowFrom": {
+                    "label": "DM 許可リスト",
+                    "placeholder": "user_openid_1\nuser_openid_2",
+                    "description": "1 行に 1 つ、許可する送信者 ID を入力します。"
+                },
+                "groupPolicy": {
+                    "label": "グループポリシー",
+                    "description": "QQ グループでボットが応答する範囲を決めます。"
+                },
+                "groupAllowFrom": {
+                    "label": "グループ許可リスト",
+                    "placeholder": "group_openid_1\ngroup_openid_2",
+                    "description": "1 行に 1 つ、許可するグループまたは会話 ID を入力します。"
+                },
+                "requireMention": {
+                    "label": "メンション必須",
+                    "description": "有効にすると、グループではボットがメンションされたときのみ応答します。"
+                },
+                "autoSendLocalPathMedia": {
+                    "label": "ローカルメディアを自動送信",
+                    "description": "ローカルファイルパスをメディアとして検出し、自動アップロードします。"
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "有効",
+                    "disabled": "無効"
+                },
+                "dmPolicy": {
+                    "open": "すべての DM を許可",
+                    "pairing": "ペアリング承認が必要",
+                    "allowlist": "許可リストのみ"
+                },
+                "groupPolicy": {
+                    "open": "すべてのグループを許可",
+                    "allowlist": "許可リストのみ",
+                    "disabled": "グループを無効化"
+                }
+            },
+            "instructions": [
+                "QQ Open Platform で Bot アプリを作成し、App ID と Client Secret を取得します",
+                "保存時に Clawy が openclaw-china の qqbot プラグインを自動インストールします",
+                "DM とグループのアクセス方針を設定します",
+                "保存後にゲートウェイを再起動し、QQ で動作を確認します"
+            ]
+        },
         "telegram": {
             "description": "@BotFather からのボットトークンを使用して Telegram に接続します",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/TjiGwxsMWi7hpDkDAQBc0ydMnEf#MEkKdqXP1orZU2x4SrFcdUHgnl1",
@@ -150,6 +212,176 @@
                 "DingTalk 開発者コンソールで社内アプリを作成し Stream モードを有効にします",
                 "Client ID と Client Secret を入力します（必須）",
                 "必要に応じて Robot Code / Corp ID / Agent ID を入力します"
+            ]
+        },
+        "wecom": {
+            "description": "openclaw-china プラグイン経由で WeCom スマートボットに接続します",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "mode": {
+                    "label": "接続モード",
+                    "description": "推奨は WS モードです。公開 callback URL が不要です。"
+                },
+                "botId": {
+                    "label": "Bot ID",
+                    "placeholder": "WeCom スマートボット ID"
+                },
+                "secret": {
+                    "label": "Secret",
+                    "placeholder": "WeCom スマートボット Secret"
+                },
+                "webhookPath": {
+                    "label": "Webhook パス",
+                    "placeholder": "/wecom"
+                },
+                "token": {
+                    "label": "Webhook Token",
+                    "placeholder": "WeCom callback token"
+                },
+                "encodingAESKey": {
+                    "label": "EncodingAESKey",
+                    "placeholder": "WeCom callback EncodingAESKey"
+                },
+                "publicBaseUrl": {
+                    "label": "公開ベース URL",
+                    "placeholder": "https://example.com"
+                },
+                "welcomeText": {
+                    "label": "ウェルカムメッセージ",
+                    "placeholder": "こんにちは、WeCom ボットです"
+                },
+                "dmPolicy": {
+                    "label": "DM ポリシー",
+                    "description": "誰が WeCom ボットに DM を送れるかを決めます。"
+                },
+                "allowFrom": {
+                    "label": "DM 許可リスト",
+                    "placeholder": "zhangsan\nlisi",
+                    "description": "1 行に 1 つ、WeCom ユーザー ID を入力します。"
+                },
+                "groupPolicy": {
+                    "label": "グループポリシー",
+                    "description": "グループチャットでの応答範囲を決めます。"
+                },
+                "groupAllowFrom": {
+                    "label": "グループ許可リスト",
+                    "placeholder": "chatid_1\nchatid_2",
+                    "description": "1 行に 1 つ、許可する group chatid を入力します。"
+                },
+                "requireMention": {
+                    "label": "グループで @mention 必須",
+                    "description": "無効にすると、通常のグループメッセージにも応答できます。"
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "有効",
+                    "disabled": "無効"
+                },
+                "mode": {
+                    "ws": "WebSocket（推奨）",
+                    "webhook": "Webhook callback"
+                },
+                "dmPolicy": {
+                    "pairing": "ペアリング承認が必要",
+                    "allowlist": "許可リストのみ",
+                    "open": "すべての DM を許可",
+                    "disabled": "DM を無効化"
+                },
+                "groupPolicy": {
+                    "open": "すべてのグループを許可",
+                    "allowlist": "許可リストのみ",
+                    "disabled": "グループを無効化"
+                }
+            },
+            "instructions": [
+                "WeCom 管理画面でスマートボットを作成し、Bot ID と Secret を取得します",
+                "まず WS モードを使うのが推奨です。Webhook モードでは公開 callback が必要です",
+                "保存時に Clawy が openclaw-china の wecom プラグインを自動インストールします",
+                "保存後にゲートウェイを再起動し、WeCom の DM またはグループで確認します"
+            ]
+        },
+        "wecomApp": {
+            "description": "openclaw-china プラグイン経由で WeCom 自建アプリに接続します",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "corpId": {
+                    "label": "Corp ID",
+                    "placeholder": "wwxxxxxx"
+                },
+                "corpSecret": {
+                    "label": "App Secret",
+                    "placeholder": "WeCom アプリ Secret"
+                },
+                "agentId": {
+                    "label": "Agent ID",
+                    "placeholder": "1000002"
+                },
+                "webhookPath": {
+                    "label": "Webhook パス",
+                    "placeholder": "/wecom-app"
+                },
+                "token": {
+                    "label": "Callback Token",
+                    "placeholder": "WeCom callback token"
+                },
+                "encodingAESKey": {
+                    "label": "Callback EncodingAESKey",
+                    "placeholder": "WeCom callback EncodingAESKey"
+                },
+                "apiBaseUrl": {
+                    "label": "API ベース URL",
+                    "placeholder": "https://qyapi.weixin.qq.com"
+                },
+                "welcomeText": {
+                    "label": "ウェルカムメッセージ",
+                    "placeholder": "こんにちは、WeCom 自建アプリです"
+                },
+                "dmPolicy": {
+                    "label": "DM ポリシー",
+                    "description": "誰が自建アプリに DM を送れるかを決めます。"
+                },
+                "allowFrom": {
+                    "label": "DM 許可リスト",
+                    "placeholder": "zhangsan\nlisi",
+                    "description": "1 行に 1 つ、WeCom ユーザー ID を入力します。"
+                },
+                "groupPolicy": {
+                    "label": "グループポリシー",
+                    "description": "グループチャットでの応答範囲を決めます。"
+                },
+                "groupAllowFrom": {
+                    "label": "グループ許可リスト",
+                    "placeholder": "chatid_1\nchatid_2",
+                    "description": "1 行に 1 つ、許可する group chatid を入力します。"
+                },
+                "requireMention": {
+                    "label": "グループで @mention 必須",
+                    "description": "無効にすると、通常のグループメッセージにも応答できます。"
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "有効",
+                    "disabled": "無効"
+                },
+                "dmPolicy": {
+                    "pairing": "ペアリング承認が必要",
+                    "allowlist": "許可リストのみ",
+                    "open": "すべての DM を許可",
+                    "disabled": "DM を無効化"
+                },
+                "groupPolicy": {
+                    "open": "すべてのグループを許可",
+                    "allowlist": "許可リストのみ",
+                    "disabled": "グループを無効化"
+                }
+            },
+            "instructions": [
+                "WeCom で自建アプリを作成し、Corp ID / Secret / Agent ID を取得します",
+                "受信メッセージには callback URL、token、EncodingAESKey の設定が必要です",
+                "保存時に Clawy が openclaw-china の wecom-app プラグインを自動インストールします",
+                "保存後にゲートウェイを再起動し、DM・グループ・主动送信を確認します"
             ]
         },
         "signal": {
