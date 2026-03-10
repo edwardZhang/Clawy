@@ -3,11 +3,13 @@
 import { execFileSync } from 'node:child_process';
 
 function git(args, options = {}) {
-  return execFileSync('git', args, {
+  const output = execFileSync('git', args, {
     cwd: options.cwd ?? process.cwd(),
     encoding: 'utf8',
     stdio: options.stdio ?? ['ignore', 'pipe', 'pipe'],
-  }).trim();
+  });
+
+  return typeof output === 'string' ? output.trim() : '';
 }
 
 function readWorktreeList(cwd) {
