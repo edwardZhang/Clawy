@@ -3,7 +3,7 @@ import { desktopApi } from '@/lib/desktop/api';
  * Channels Page
  * Manage messaging channel connections with configuration UI
  */
-import { useState, useEffect, useCallback, useRef, type SVGProps } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus,
   Radio,
@@ -56,19 +56,14 @@ import {
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import dingTalkIconUrl from '../../../resources/dingtalk.svg';
-
-function LarkBrandIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
-      <path
-        fill="currentColor"
-        d="M12.9 2.58a1 1 0 0 0-1.53.2L6.8 10.15a1 1 0 0 0 .86 1.55h3.18l-2.98 4.93a1 1 0 0 0 1.4 1.35l7.9-5.08a1 1 0 0 0-.55-1.84h-3.16l2.95-6.7a1 1 0 0 0-1.5-1.78L12.9 2.58Z"
-      />
-    </svg>
-  );
-}
+import feishuIconUrl from '../../../resources/feishu.svg';
+import qqIconUrl from '../../../resources/QQ.svg';
+import wecomBotIconUrl from '../../../resources/wechat.svg';
+import wecomAppIconUrl from '../../../resources/wecomapp.svg';
 
 function renderChannelBrandIcon(type: ChannelType, className: string) {
+  const imageClassName = `${className} object-contain`;
+
   switch (type) {
     case 'telegram':
       return <SiTelegram className={className} style={{ color: '#26A5E4' }} />;
@@ -83,11 +78,17 @@ function renderChannelBrandIcon(type: ChannelType, className: string) {
         <img
           src={dingTalkIconUrl}
           alt="DingTalk"
-          className={`${className} object-contain`}
+          className={imageClassName}
         />
       );
+    case 'qqbot':
+      return <img src={qqIconUrl} alt="QQ Bot" className={imageClassName} />;
+    case 'wecom':
+      return <img src={wecomBotIconUrl} alt="WeCom Bot" className={imageClassName} />;
+    case 'wecom-app':
+      return <img src={wecomAppIconUrl} alt="WeCom App" className={imageClassName} />;
     case 'feishu':
-      return <LarkBrandIcon className={className} style={{ color: '#00B96B' }} />;
+      return <img src={feishuIconUrl} alt="Feishu" className={imageClassName} />;
     default:
       return (
         <span className={className.includes('h-7') ? 'text-2xl' : 'text-3xl'}>
