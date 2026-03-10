@@ -28,6 +28,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
+import { Select } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import {
   createRuntimeCheckMachineState,
@@ -101,10 +102,13 @@ const defaultSkills: DefaultSkill[] = [
 ];
 
 import {
+  DEFAULT_PROVIDER_API_TYPE,
   defaultAuthModeForProvider,
   SETUP_PROVIDERS,
   isProviderAuthModeAvailable,
+  resolveProviderApiTypeForSave,
   resolveProviderTypeForAuth,
+  type ProviderApiType,
   type ProviderAuthMode,
   type ProviderTypeInfo,
   getProviderIconUrl,
@@ -1301,6 +1305,7 @@ function ProviderContent({
   const [selectedProviderConfigId, setSelectedProviderConfigId] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [modelId, setModelId] = useState('');
+  const [apiType, setApiType] = useState<ProviderApiType>(DEFAULT_PROVIDER_API_TYPE);
   const [tokenValue, setTokenValue] = useState('');
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [configuredTypes, setConfiguredTypes] = useState<Set<string>>(new Set());
@@ -1557,7 +1562,7 @@ function ProviderContent({
         const savedProvider = await desktopApi.ipcRenderer.invoke(
           'provider:get',
           providerIdForLoad
-        ) as { baseUrl?: string; model?: string; authMode?: ProviderAuthMode | null } | null;
+        ) as { baseUrl?: string; model?: string; apiType?: ProviderApiType; authMode?: ProviderAuthMode | null } | null;
         const storedKey = await desktopApi.ipcRenderer.invoke('provider:getApiKey', providerIdForLoad) as string | null;
         if (!cancelled) {
           const nextExistingTypes = new Set(list.map((item) => item.type));
@@ -1586,6 +1591,7 @@ function ProviderContent({
           const info = providers.find((p) => p.id === selectedProvider);
           setBaseUrl(savedProvider?.baseUrl || info?.defaultBaseUrl || '');
           setModelId(savedProvider?.model || info?.defaultModelId || '');
+          setApiType(savedProvider?.apiType || DEFAULT_PROVIDER_API_TYPE);
         }
       } catch (error) {
         if (!cancelled) {
@@ -1710,8 +1716,9 @@ function ProviderContent({
       const providerPayload = {
         id: providerIdForSave,
         name: selectedProvider === 'custom' ? t('settings:aiProviders.custom') : (selectedProviderData?.name || selectedProvider),
-        type: providerIdForSave,
+        type: selectedProvider === 'custom' ? 'custom' : (effectiveSelectedProviderType || selectedProvider),
         authMode,
+        apiType: resolveProviderApiTypeForSave(selectedProvider, apiType),
         baseUrl: baseUrl.trim() || undefined,
         model: effectiveModelId,
         enabled: true,
@@ -1782,6 +1789,7 @@ function ProviderContent({
     onConfiguredChange(false);
     onApiKeyChange('');
     setTokenValue('');
+    setApiType(DEFAULT_PROVIDER_API_TYPE);
     setKeyValid(null);
     setProviderMenuOpen(false);
     setAuthMode(defaultAuthModeForProvider(providerId, configuredTypes, providers.find((provider) => provider.id === providerId)));
@@ -1916,6 +1924,23 @@ function ProviderContent({
               <p className="text-xs text-muted-foreground">
                 {t('provider.modelIdDesc')}
               </p>
+            </div>
+          )}
+          {selectedProvider === 'custom' && (
+            <div className="space-y-2">
+              <Label htmlFor="apiType">{t('settings:aiProviders.dialog.apiType')}</Label>
+              <Select
+                id="apiType"
+                value={apiType}
+                onChange={(event) => {
+                  setApiType(event.target.value as ProviderApiType);
+                  onConfiguredChange(false);
+                }}
+                className="bg-background border-input"
+              >
+                <option value="chat-completions">{t('settings:aiProviders.dialog.apiTypeChatCompletions')}</option>
+                <option value="openai-responses">{t('settings:aiProviders.dialog.apiTypeOpenaiResponses')}</option>
+              </Select>
             </div>
           )}
 

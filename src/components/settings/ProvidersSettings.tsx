@@ -22,16 +22,20 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useProviderStore, type ProviderConfig, type ProviderWithKeyInfo } from '@/stores/providers';
 import {
   defaultAuthModeForProvider,
+  DEFAULT_PROVIDER_API_TYPE,
   isProviderAuthModeAvailable,
   PROVIDER_TYPE_INFO,
+  resolveProviderApiTypeForSave,
   resolveProviderTypeForAuth,
   shouldHideProviderTypeInPicker,
+  type ProviderApiType,
   type ProviderAuthMode,
   type ProviderType,
   getProviderIconUrl,
@@ -94,7 +98,7 @@ export function ProvidersSettings() {
     type: ProviderType,
     name: string,
     apiKey: string,
-    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode }
+    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode; apiType?: ProviderApiType }
   ) => {
     // Only custom supports multiple instances.
     // Built-in providers remain singleton by type.
@@ -107,6 +111,7 @@ export function ProvidersSettings() {
           type,
           name,
           authMode: options?.authMode,
+          apiType: options?.apiType,
           baseUrl: options?.baseUrl,
           model: options?.model,
           enabled: true,
@@ -130,7 +135,7 @@ export function ProvidersSettings() {
     type: ProviderType,
     name: string,
     token: string,
-    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode }
+    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode; apiType?: ProviderApiType }
   ) => {
     const id = type === 'custom' ? `custom-${crypto.randomUUID()}` : type;
     try {
@@ -140,6 +145,7 @@ export function ProvidersSettings() {
           type,
           name,
           authMode: options?.authMode ?? 'token',
+          apiType: options?.apiType,
           baseUrl: options?.baseUrl,
           model: options?.model,
           enabled: true,
@@ -290,6 +296,7 @@ function ProviderCard({
   const [newKey, setNewKey] = useState('');
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl || '');
   const [modelId, setModelId] = useState(provider.model || '');
+  const [apiType, setApiType] = useState<ProviderApiType>(provider.apiType || DEFAULT_PROVIDER_API_TYPE);
   const [fallbackModelsText, setFallbackModelsText] = useState(
     normalizeFallbackModels(provider.fallbackModels).join('\n')
   );
@@ -331,10 +338,11 @@ function ProviderCard({
       setShowKey(false);
       setBaseUrl(provider.baseUrl || '');
       setModelId(provider.model || '');
+      setApiType(provider.apiType || DEFAULT_PROVIDER_API_TYPE);
       setFallbackModelsText(normalizeFallbackModels(provider.fallbackModels).join('\n'));
       setFallbackProviderIds(normalizeFallbackProviderIds(provider.fallbackProviderIds));
     }
-  }, [isEditing, provider.baseUrl, provider.fallbackModels, provider.fallbackProviderIds, provider.model]);
+  }, [isEditing, provider.apiType, provider.baseUrl, provider.fallbackModels, provider.fallbackProviderIds, provider.model]);
 
   const fallbackOptions = allProviders.filter((candidate) => candidate.id !== provider.id);
 
@@ -382,6 +390,10 @@ function ProviderCard({
         }
         if (showModelIdField && (modelId.trim() || undefined) !== (provider.model || undefined)) {
           updates.model = modelId.trim() || undefined;
+        }
+        const normalizedApiType = resolveProviderApiTypeForSave(provider.type, apiType);
+        if (provider.type === 'custom' && normalizedApiType !== (provider.apiType || DEFAULT_PROVIDER_API_TYPE)) {
+          updates.apiType = normalizedApiType;
         }
         if (!fallbackModelsEqual(normalizedFallbackModels, provider.fallbackModels)) {
           updates.fallbackModels = normalizedFallbackModels;
@@ -463,6 +475,19 @@ function ProviderCard({
                       placeholder={typeInfo?.modelIdPlaceholder || 'provider/model-id'}
                       className="h-9 text-sm"
                     />
+                  </div>
+                )}
+                {provider.type === 'custom' && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">{t('aiProviders.dialog.apiType')}</Label>
+                    <Select
+                      value={apiType}
+                      onChange={(event) => setApiType(event.target.value as ProviderApiType)}
+                      className="h-9 text-sm"
+                    >
+                      <option value="chat-completions">{t('aiProviders.dialog.apiTypeChatCompletions')}</option>
+                      <option value="openai-responses">{t('aiProviders.dialog.apiTypeOpenaiResponses')}</option>
+                    </Select>
                   </div>
                 )}
               </div>
@@ -559,6 +584,10 @@ function ProviderCard({
                         !newKey.trim()
                         && (baseUrl.trim() || undefined) === (provider.baseUrl || undefined)
                         && (modelId.trim() || undefined) === (provider.model || undefined)
+                        && (
+                          provider.type !== 'custom'
+                          || resolveProviderApiTypeForSave(provider.type, apiType) === (provider.apiType || DEFAULT_PROVIDER_API_TYPE)
+                        )
                         && fallbackModelsEqual(normalizeFallbackModels(fallbackModelsText.split('\n')), provider.fallbackModels)
                         && fallbackProviderIdsEqual(fallbackProviderIds, provider.fallbackProviderIds)
                       )
@@ -657,13 +686,13 @@ interface AddProviderDialogProps {
     type: ProviderType,
     name: string,
     apiKey: string,
-    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode }
+    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode; apiType?: ProviderApiType }
   ) => Promise<void>;
   onAddToken: (
     type: ProviderType,
     name: string,
     token: string,
-    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode }
+    options?: { baseUrl?: string; model?: string; authMode?: ProviderAuthMode; apiType?: ProviderApiType }
   ) => Promise<void>;
   onValidateKey: (
     type: string,
@@ -688,6 +717,7 @@ function AddProviderDialog({
   const [tokenValue, setTokenValue] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [modelId, setModelId] = useState('');
+  const [apiType, setApiType] = useState<ProviderApiType>(DEFAULT_PROVIDER_API_TYPE);
   const [showKey, setShowKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -939,6 +969,7 @@ function AddProviderDialog({
         name || (typeInfo?.id === 'custom' ? t('aiProviders.custom') : typeInfo?.name) || selectedType;
       const resolvedOptions = {
         authMode,
+        apiType: resolveProviderApiTypeForSave(selectedType, apiType),
         baseUrl: baseUrl.trim() || undefined,
         model: resolveProviderModelForSave(typeInfo, modelId, devModeUnlocked),
       };
@@ -989,6 +1020,7 @@ function AddProviderDialog({
                     setValidationError(null);
                     setBaseUrl(type.defaultBaseUrl || '');
                     setModelId(type.defaultModelId || '');
+                    setApiType(DEFAULT_PROVIDER_API_TYPE);
                     setAuthMode(defaultAuthModeForProvider(type.id, existingTypes, type));
                   }}
                   className="p-4 rounded-lg border hover:bg-accent transition-colors text-center"
@@ -1020,6 +1052,7 @@ function AddProviderDialog({
                       setTokenValue('');
                       setBaseUrl('');
                       setModelId('');
+                      setApiType(DEFAULT_PROVIDER_API_TYPE);
                     }}
                     className="text-sm text-muted-foreground hover:text-foreground"
                   >
@@ -1198,6 +1231,19 @@ function AddProviderDialog({
                       setValidationError(null);
                     }}
                   />
+                </div>
+              )}
+              {selectedType === 'custom' && (
+                <div className="space-y-2">
+                  <Label htmlFor="apiType">{t('aiProviders.dialog.apiType')}</Label>
+                  <Select
+                    id="apiType"
+                    value={apiType}
+                    onChange={(event) => setApiType(event.target.value as ProviderApiType)}
+                  >
+                    <option value="chat-completions">{t('aiProviders.dialog.apiTypeChatCompletions')}</option>
+                    <option value="openai-responses">{t('aiProviders.dialog.apiTypeOpenaiResponses')}</option>
+                  </Select>
                 </div>
               )}
               {/* Device OAuth Trigger — only shown when in OAuth mode */}

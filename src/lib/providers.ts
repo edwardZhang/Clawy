@@ -22,14 +22,17 @@ export const PROVIDER_TYPES = [
 ] as const;
 export type ProviderType = (typeof PROVIDER_TYPES)[number];
 export type ProviderAuthMode = 'oauth' | 'apikey' | 'token';
+export type ProviderApiType = 'chat-completions' | 'openai-responses';
 
 export const OLLAMA_PLACEHOLDER_API_KEY = 'ollama-local';
+export const DEFAULT_PROVIDER_API_TYPE: ProviderApiType = 'chat-completions';
 
 export interface ProviderConfig {
   id: string;
   name: string;
   type: ProviderType;
   authMode?: ProviderAuthMode;
+  apiType?: ProviderApiType;
   baseUrl?: string;
   model?: string;
   fallbackModels?: string[];
@@ -149,6 +152,17 @@ export function resolveProviderApiKeyForSave(type: ProviderType | string, apiKey
     return trimmed || OLLAMA_PLACEHOLDER_API_KEY;
   }
   return trimmed || undefined;
+}
+
+export function resolveProviderApiTypeForSave(
+  type: ProviderType | string,
+  apiType?: ProviderApiType | null
+): ProviderApiType | undefined {
+  if (type !== 'custom') {
+    return undefined;
+  }
+
+  return apiType === 'openai-responses' ? 'openai-responses' : DEFAULT_PROVIDER_API_TYPE;
 }
 
 export function resolveProviderTypeForAuth(

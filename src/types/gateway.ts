@@ -52,6 +52,7 @@ export interface ProviderConfig {
   name: string;
   type: 'openai' | 'anthropic' | 'ollama' | 'custom';
   apiKey?: string;
+  apiType?: 'chat-completions' | 'openai-responses';
   baseUrl?: string;
   model?: string;
   enabled: boolean;

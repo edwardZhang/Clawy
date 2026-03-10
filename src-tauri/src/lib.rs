@@ -1064,6 +1064,8 @@ struct ProviderConfig {
     provider_type: String,
     #[serde(default)]
     auth_mode: Option<String>,
+    #[serde(default)]
+    api_type: Option<String>,
     base_url: Option<String>,
     model: Option<String>,
     fallback_models: Option<Vec<String>>,
@@ -3329,6 +3331,10 @@ fn sync_provider_store_from_openclaw(store: &mut ProviderStore) -> bool {
             name: "Codex".into(),
             provider_type: "openai-codex".into(),
             auth_mode: Some("oauth".into()),
+            api_type: store
+                .providers
+                .get("openai-codex")
+                .and_then(|provider| provider.api_type.clone()),
             base_url: None,
             model,
             fallback_models: store
@@ -3408,6 +3414,10 @@ fn sync_provider_store_from_openclaw(store: &mut ProviderStore) -> bool {
             name: "Anthropic".into(),
             provider_type: "anthropic".into(),
             auth_mode,
+            api_type: store
+                .providers
+                .get("anthropic")
+                .and_then(|provider| provider.api_type.clone()),
             base_url: None,
             model,
             fallback_models: store
@@ -4171,8 +4181,15 @@ fn provider_default_model(provider_type: &str) -> Option<&'static str> {
     }
 }
 
-fn provider_api(provider_type: &str) -> Option<&'static str> {
-    match provider_type {
+fn custom_provider_api_type(api_type: Option<&str>) -> &'static str {
+    match api_type {
+        Some("openai-responses") => "openai-responses",
+        _ => "openai-completions",
+    }
+}
+
+fn provider_api(config: &ProviderConfig) -> Option<&'static str> {
+    match config.provider_type.as_str() {
         "openai" => Some("openai-responses"),
         "openrouter" => Some("openai-completions"),
         "ark" => Some("openai-completions"),
@@ -4181,7 +4198,7 @@ fn provider_api(provider_type: &str) -> Option<&'static str> {
         "minimax-portal" => Some("anthropic-messages"),
         "minimax-portal-cn" => Some("anthropic-messages"),
         "qwen-portal" => Some("openai-completions"),
-        "custom" => Some("openai-completions"),
+        "custom" => Some(custom_provider_api_type(config.api_type.as_deref())),
         "ollama" => Some("openai-completions"),
         _ => None,
     }
@@ -4209,7 +4226,7 @@ fn provider_headers(provider_type: &str) -> Option<Map<String, Value>> {
     let mut headers = Map::new();
     headers.insert(
         "HTTP-Referer".into(),
-        Value::String("https://claw-x.com".into()),
+        Value::String("https://clawy.wymsn.com".into()),
     );
     headers.insert("X-Title".into(), Value::String("Clawy".into()));
     Some(headers)
@@ -4647,7 +4664,7 @@ fn sync_provider_state_to_openclaw_with_token(
         .base_url
         .as_deref()
         .or_else(|| provider_base_url(&config.provider_type));
-    let api = provider_api(&config.provider_type);
+    let api = provider_api(config);
     let headers = provider_headers(&config.provider_type);
 
     if let Some(token) = token.filter(|value| !value.trim().is_empty()) {
@@ -8183,6 +8200,7 @@ fn persist_oauth_provider_success(
         name: oauth_provider_name(provider_type),
         provider_type: provider_type.to_string(),
         auth_mode: Some("oauth".into()),
+        api_type: existing.as_ref().and_then(|config| config.api_type.clone()),
         base_url: match provider_type {
             "openai-codex" => None,
             _ => Some(base_url.clone()),
@@ -8871,7 +8889,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             }
         }
         "menu-docs" => {
-            let _ = open_url_with_system("https://claw-x.com");
+            let _ = open_url_with_system("https://clawy.wymsn.com");
         }
         "menu-issues" => {
             let _ = open_url_with_system("https://github.com/edwardZhang/Clawy/issues");
@@ -11255,6 +11273,71 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+    use std::sync::Mutex;
+
+    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn provider_config_for_test(provider_type: &str, api_type: Option<&str>) -> ProviderConfig {
+        ProviderConfig {
+            id: format!("{provider_type}-test"),
+            name: provider_type.to_string(),
+            provider_type: provider_type.to_string(),
+            auth_mode: Some("apikey".into()),
+            api_type: api_type.map(str::to_string),
+            base_url: None,
+            model: None,
+            fallback_models: None,
+            fallback_provider_ids: None,
+            enabled: true,
+            created_at: now_iso_string(),
+            updated_at: now_iso_string(),
+        }
+    }
+
+    fn with_temp_home_dir<T>(test_dir: &TestDir, callback: impl FnOnce(PathBuf) -> T) -> T {
+        let _guard = HOME_ENV_LOCK.lock().expect("lock HOME env");
+        let home_dir = test_dir.path().join("home");
+        fs::create_dir_all(&home_dir).expect("create temp home dir");
+
+        let old_home = std::env::var_os("HOME");
+        let old_userprofile = std::env::var_os("USERPROFILE");
+        let old_homedrive = std::env::var_os("HOMEDRIVE");
+        let old_homepath = std::env::var_os("HOMEPATH");
+
+        unsafe {
+            std::env::set_var("HOME", &home_dir);
+            std::env::set_var("USERPROFILE", &home_dir);
+            std::env::remove_var("HOMEDRIVE");
+            std::env::remove_var("HOMEPATH");
+        }
+
+        let result = catch_unwind(AssertUnwindSafe(|| callback(home_dir.clone())));
+
+        unsafe {
+            match old_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match old_userprofile {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+            match old_homedrive {
+                Some(value) => std::env::set_var("HOMEDRIVE", value),
+                None => std::env::remove_var("HOMEDRIVE"),
+            }
+            match old_homepath {
+                Some(value) => std::env::set_var("HOMEPATH", value),
+                None => std::env::remove_var("HOMEPATH"),
+            }
+        }
+
+        match result {
+            Ok(value) => value,
+            Err(payload) => resume_unwind(payload),
+        }
+    }
 
     struct TestDir {
         path: PathBuf,
@@ -11279,6 +11362,129 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn custom_provider_api_type_defaults_to_chat_completions() {
+        let legacy = provider_config_for_test("custom", None);
+        let explicit_default =
+            provider_config_for_test("custom", Some("chat-completions"));
+
+        assert_eq!(provider_api(&legacy), Some("openai-completions"));
+        assert_eq!(provider_api(&explicit_default), Some("openai-completions"));
+    }
+
+    #[test]
+    fn custom_provider_api_type_supports_openai_responses() {
+        let config = provider_config_for_test("custom", Some("openai-responses"));
+
+        assert_eq!(provider_api(&config), Some("openai-responses"));
+    }
+
+    #[test]
+    fn sync_custom_provider_persists_openai_responses_provider_config() {
+        let test_dir = TestDir::new("custom-provider-sync-responses");
+
+        with_temp_home_dir(&test_dir, |home_dir| {
+            let config = ProviderConfig {
+                id: "custom-response-provider".into(),
+                name: "Custom Responses".into(),
+                provider_type: "custom".into(),
+                auth_mode: Some("apikey".into()),
+                api_type: Some("openai-responses".into()),
+                base_url: Some("https://14o.kangaroom.top/v1".into()),
+                model: Some("gpt-5.4".into()),
+                fallback_models: None,
+                fallback_provider_ids: None,
+                enabled: true,
+                created_at: now_iso_string(),
+                updated_at: now_iso_string(),
+            };
+            let mut store = ProviderStore::default();
+            store.providers.insert(config.id.clone(), config.clone());
+
+            sync_provider_state_to_openclaw(&store, &config, Some("sk-test"))
+                .expect("sync custom provider");
+
+            let provider_key = get_openclaw_provider_key(&config.provider_type, &config.id);
+            let openclaw = read_openclaw_json().expect("read openclaw.json");
+            let provider_entry = openclaw
+                .get("models")
+                .and_then(Value::as_object)
+                .and_then(|models| models.get("providers"))
+                .and_then(Value::as_object)
+                .and_then(|providers| providers.get(&provider_key))
+                .and_then(Value::as_object)
+                .expect("custom provider entry");
+
+            assert_eq!(
+                provider_entry.get("api").and_then(Value::as_str),
+                Some("openai-responses")
+            );
+            assert_eq!(
+                provider_entry.get("baseUrl").and_then(Value::as_str),
+                Some("https://14o.kangaroom.top/v1")
+            );
+
+            let auth_profiles_path = openclaw_config_dir_from_home(&home_dir)
+                .join("agents")
+                .join("main")
+                .join("agent")
+                .join("auth-profiles.json");
+            let auth_profiles: AuthProfilesStore = read_json_or_default(&auth_profiles_path);
+            let profile_id = format!("{provider_key}:default");
+            assert_eq!(
+                auth_profiles
+                    .profiles
+                    .get(&profile_id)
+                    .and_then(|profile| profile.get("key"))
+                    .and_then(Value::as_str),
+                Some("sk-test")
+            );
+        });
+    }
+
+    #[test]
+    fn sync_custom_provider_defaults_to_chat_completions_provider_config() {
+        let test_dir = TestDir::new("custom-provider-sync-default");
+
+        with_temp_home_dir(&test_dir, |_home_dir| {
+            let config = ProviderConfig {
+                id: "custom-chat-provider".into(),
+                name: "Custom Chat".into(),
+                provider_type: "custom".into(),
+                auth_mode: Some("apikey".into()),
+                api_type: None,
+                base_url: Some("https://example.com/v1".into()),
+                model: Some("example-model".into()),
+                fallback_models: None,
+                fallback_provider_ids: None,
+                enabled: true,
+                created_at: now_iso_string(),
+                updated_at: now_iso_string(),
+            };
+            let mut store = ProviderStore::default();
+            store.providers.insert(config.id.clone(), config.clone());
+
+            sync_provider_state_to_openclaw(&store, &config, Some("sk-test"))
+                .expect("sync custom provider");
+
+            let provider_key = get_openclaw_provider_key(&config.provider_type, &config.id);
+            let openclaw = read_openclaw_json().expect("read openclaw.json");
+            let provider_entry = openclaw
+                .get("models")
+                .and_then(Value::as_object)
+                .and_then(|models| models.get("providers"))
+                .and_then(Value::as_object)
+                .and_then(|providers| providers.get(&provider_key))
+                .and_then(Value::as_object)
+                .expect("custom provider entry");
+
+            assert_eq!(
+                provider_entry.get("api").and_then(Value::as_str),
+                Some("openai-completions")
+            );
+        });
     }
 
     fn write_test_script(path: &Path, contents: &str) {

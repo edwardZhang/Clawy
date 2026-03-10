@@ -1159,7 +1159,7 @@ export function Settings() {
             <Button
               variant="link"
               className="h-auto p-0"
-              onClick={() => desktopApi.openExternal('https://claw-x.com')}
+              onClick={() => desktopApi.openExternal('https://clawy.wymsn.com')}
             >
               {t('about.docs')}
             </Button>

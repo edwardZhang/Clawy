@@ -24,10 +24,12 @@ async function discoverDeveloperIdIdentities() {
     throw new Error(`Unable to inspect local code-signing identities.\n${result.stderr || result.stdout}`.trim());
   }
 
-  return result.stdout
+  const identities = result.stdout
     .split('\n')
     .map((line) => extractQuotedValue(line))
     .filter((identity) => identity && identity.startsWith('Developer ID Application:'));
+
+  return [...new Set(identities)];
 }
 
 function hasAppStoreConnectCredentials(env) {
