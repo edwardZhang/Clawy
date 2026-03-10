@@ -2,6 +2,10 @@
 
 import 'zx/globals';
 
+if (process.platform === 'win32') {
+  usePowerShell();
+}
+
 const ROOT_DIR = path.resolve(__dirname, '..');
 const UV_VERSION = '0.10.0';
 const BASE_URL = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;

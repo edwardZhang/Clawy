@@ -178,6 +178,25 @@ pnpm run init
 pnpm dev
 ```
 
+### Packaging
+
+Use the existing macOS commands for DMG packaging:
+
+```bash
+pnpm run package:mac:dmg
+pnpm run package:mac:dmg:adhoc
+pnpm run package:mac:dmg:signed
+pnpm run package:mac:dmg:notarized
+```
+
+Use the Windows packaging commands to build installers without changing the macOS flow:
+
+```bash
+pnpm run package:win
+pnpm run package:win:nsis
+pnpm run package:win:msi
+```
+
 ## Acknowledgments
 
 Clawy stands on the work of several excellent open-source projects:

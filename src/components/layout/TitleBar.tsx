@@ -1,8 +1,8 @@
 import { desktopApi } from '@/lib/desktop/api';
 /**
  * TitleBar Component
- * macOS: use the native transparent title bar.
- * Windows/Linux: icon + "Clawy" on left, minimize/maximize/close on right.
+ * macOS/Windows: use the native title bar.
+ * Linux: render custom window controls.
  */
 import { useState, useEffect } from 'react';
 import { Minus, Square, X, Copy } from 'lucide-react';
@@ -10,8 +10,10 @@ import logoSvg from '@/assets/logo.svg';
 
 export function TitleBar() {
   const isMac = desktopApi.platform === 'darwin';
+  const isWindows = desktopApi.platform === 'win32';
 
-  if (isMac) {
+  // Keep the native title bar on macOS and Windows.
+  if (isMac || isWindows) {
     return null;
   }
 

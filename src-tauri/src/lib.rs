@@ -3554,9 +3554,11 @@ fn packaged_resource_candidates() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(executable) = std::env::current_exe() {
         if let Some(exe_dir) = executable.parent() {
+            roots.push(exe_dir.to_path_buf());
             roots.push(exe_dir.join("resources"));
             roots.push(exe_dir.join("../Resources"));
             if let Some(parent) = exe_dir.parent() {
+                roots.push(parent.to_path_buf());
                 roots.push(parent.join("Resources"));
                 roots.push(parent.join("resources"));
             }
@@ -4077,6 +4079,29 @@ fn sync_gateway_settings_to_openclaw(settings: &Settings) -> Result<(), String> 
         "token".into(),
         Value::String(settings.gateway_token.clone()),
     );
+
+    let control_ui = gateway_obj
+        .entry("controlUi")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let control_ui_obj = ensure_object(control_ui);
+    let allowed_origins = control_ui_obj
+        .entry("allowedOrigins")
+        .or_insert_with(|| Value::Array(Vec::new()));
+
+    let mut origins = match allowed_origins {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToString::to_string)
+            .collect::<Vec<String>>(),
+        _ => Vec::new(),
+    };
+
+    if !origins.iter().any(|origin| origin == "http://tauri.localhost") {
+        origins.push("http://tauri.localhost".into());
+    }
+
+    *allowed_origins = Value::Array(origins.into_iter().map(Value::String).collect());
 
     let browser = root
         .entry("browser")
