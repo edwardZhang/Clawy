@@ -52,14 +52,76 @@
         "saveAndConnect": "Save & Connect",
         "envVar": "Environment Variable: {{var}}",
         "pluginStatus": {
-            "loading": "Checking Matrix plugin status...",
-            "matrixMissing": "Matrix plugin is not installed yet. Clawy will install it when you save this channel.",
-            "matrixDisabled": "Matrix plugin is installed but disabled. Clawy will enable it when you save this channel.",
-            "matrixLoaded": "Matrix plugin is ready.",
-            "matrixError": "Matrix plugin is currently unavailable. Saving will retry the plugin setup."
+            "loading": "Checking {{name}} plugin status...",
+            "missing": "{{name}} plugin is not installed yet. Clawy will install it when you save this channel.",
+            "disabled": "{{name}} plugin is installed but disabled. Clawy will enable it when you save this channel.",
+            "loaded": "{{name}} plugin is ready.",
+            "error": "{{name}} plugin is currently unavailable. Saving will retry the plugin setup."
         }
     },
     "meta": {
+        "qqbot": {
+            "description": "Connect QQ Open Platform bot via the openclaw-china plugin",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "appId": {
+                    "label": "App ID",
+                    "placeholder": "QQ bot App ID"
+                },
+                "clientSecret": {
+                    "label": "Client Secret",
+                    "placeholder": "QQ bot Client Secret"
+                },
+                "dmPolicy": {
+                    "label": "Direct message policy",
+                    "description": "Choose who can start a QQ DM with the bot."
+                },
+                "allowFrom": {
+                    "label": "DM allowlist",
+                    "placeholder": "user_openid_1\nuser_openid_2",
+                    "description": "One sender identifier per line. Used with Allowlist mode."
+                },
+                "groupPolicy": {
+                    "label": "Group policy",
+                    "description": "Control whether the bot responds in QQ groups."
+                },
+                "groupAllowFrom": {
+                    "label": "Group allowlist",
+                    "placeholder": "group_openid_1\ngroup_openid_2",
+                    "description": "One allowed group or session identifier per line."
+                },
+                "requireMention": {
+                    "label": "Require mention",
+                    "description": "Only answer in groups when the bot is mentioned."
+                },
+                "autoSendLocalPathMedia": {
+                    "label": "Auto send local media",
+                    "description": "Allow the plugin to detect local file paths and upload them as media."
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "Enabled",
+                    "disabled": "Disabled"
+                },
+                "dmPolicy": {
+                    "open": "Allow all DMs",
+                    "pairing": "Pairing approval required",
+                    "allowlist": "Allowlist only"
+                },
+                "groupPolicy": {
+                    "open": "Allow all groups",
+                    "allowlist": "Allowlist only",
+                    "disabled": "Disable groups"
+                }
+            },
+            "instructions": [
+                "Create a bot app in QQ Open Platform and copy its App ID and Client Secret",
+                "Clawy installs the openclaw-china qqbot plugin automatically when you save",
+                "Choose the DM and group access policy that matches your rollout",
+                "Save, restart the gateway, and test the bot in QQ"
+            ]
+        },
         "telegram": {
             "description": "Connect Telegram using a bot token from @BotFather",
             "docsUrl": "https://icnnp7d0dymg.feishu.cn/wiki/TjiGwxsMWi7hpDkDAQBc0ydMnEf#MEkKdqXP1orZU2x4SrFcdUHgnl1",
@@ -150,6 +212,176 @@
                 "Create a DingTalk internal app and enable Stream mode",
                 "Fill in Client ID and Client Secret (required)",
                 "Fill in Robot Code / Corp ID / Agent ID if your setup requires them"
+            ]
+        },
+        "wecom": {
+            "description": "Connect WeCom smart bot via the openclaw-china plugin",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "mode": {
+                    "label": "Transport mode",
+                    "description": "WS is recommended and does not require a public callback URL."
+                },
+                "botId": {
+                    "label": "Bot ID",
+                    "placeholder": "WeCom smart bot ID"
+                },
+                "secret": {
+                    "label": "Secret",
+                    "placeholder": "WeCom smart bot secret"
+                },
+                "webhookPath": {
+                    "label": "Webhook path",
+                    "placeholder": "/wecom"
+                },
+                "token": {
+                    "label": "Webhook token",
+                    "placeholder": "WeCom callback token"
+                },
+                "encodingAESKey": {
+                    "label": "EncodingAESKey",
+                    "placeholder": "WeCom callback EncodingAESKey"
+                },
+                "publicBaseUrl": {
+                    "label": "Public base URL",
+                    "placeholder": "https://example.com"
+                },
+                "welcomeText": {
+                    "label": "Welcome text",
+                    "placeholder": "Hello, I am your WeCom bot"
+                },
+                "dmPolicy": {
+                    "label": "Direct message policy",
+                    "description": "Choose who can start a direct chat with the WeCom bot."
+                },
+                "allowFrom": {
+                    "label": "DM allowlist",
+                    "placeholder": "zhangsan\nlisi",
+                    "description": "One WeCom user ID per line."
+                },
+                "groupPolicy": {
+                    "label": "Group policy",
+                    "description": "Control where the bot answers in WeCom group chats."
+                },
+                "groupAllowFrom": {
+                    "label": "Group allowlist",
+                    "placeholder": "chatid_1\nchatid_2",
+                    "description": "One allowed group chatid per line."
+                },
+                "requireMention": {
+                    "label": "Require @mention in groups",
+                    "description": "Disable this only if you want the bot to answer normal group messages."
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "Enabled",
+                    "disabled": "Disabled"
+                },
+                "mode": {
+                    "ws": "WebSocket (recommended)",
+                    "webhook": "Webhook callback"
+                },
+                "dmPolicy": {
+                    "pairing": "Pairing approval required",
+                    "allowlist": "Allowlist only",
+                    "open": "Allow all DMs",
+                    "disabled": "Disable DMs"
+                },
+                "groupPolicy": {
+                    "open": "Allow all groups",
+                    "allowlist": "Allowlist only",
+                    "disabled": "Disable groups"
+                }
+            },
+            "instructions": [
+                "Create a smart bot in WeCom admin and copy its Bot ID and Secret",
+                "Prefer WS mode first. Webhook mode requires a public callback endpoint",
+                "Clawy installs the openclaw-china wecom plugin automatically when you save",
+                "Save, restart the gateway, and test in WeCom DM or group chat"
+            ]
+        },
+        "wecomApp": {
+            "description": "Connect WeCom self-built app via the openclaw-china plugin",
+            "docsUrl": "https://github.com/BytePioneer-AI/openclaw-china",
+            "fields": {
+                "corpId": {
+                    "label": "Corp ID",
+                    "placeholder": "wwxxxxxx"
+                },
+                "corpSecret": {
+                    "label": "App Secret",
+                    "placeholder": "WeCom app secret"
+                },
+                "agentId": {
+                    "label": "Agent ID",
+                    "placeholder": "1000002"
+                },
+                "webhookPath": {
+                    "label": "Webhook path",
+                    "placeholder": "/wecom-app"
+                },
+                "token": {
+                    "label": "Callback token",
+                    "placeholder": "WeCom callback token"
+                },
+                "encodingAESKey": {
+                    "label": "Callback EncodingAESKey",
+                    "placeholder": "WeCom callback EncodingAESKey"
+                },
+                "apiBaseUrl": {
+                    "label": "API base URL",
+                    "placeholder": "https://qyapi.weixin.qq.com"
+                },
+                "welcomeText": {
+                    "label": "Welcome text",
+                    "placeholder": "Hello, I am your WeCom app bot"
+                },
+                "dmPolicy": {
+                    "label": "Direct message policy",
+                    "description": "Choose who can start a direct chat with the self-built app."
+                },
+                "allowFrom": {
+                    "label": "DM allowlist",
+                    "placeholder": "zhangsan\nlisi",
+                    "description": "One WeCom user ID per line."
+                },
+                "groupPolicy": {
+                    "label": "Group policy",
+                    "description": "Control where the bot answers in WeCom group chats."
+                },
+                "groupAllowFrom": {
+                    "label": "Group allowlist",
+                    "placeholder": "chatid_1\nchatid_2",
+                    "description": "One allowed group chatid per line."
+                },
+                "requireMention": {
+                    "label": "Require @mention in groups",
+                    "description": "Disable this only if you want the bot to answer normal group messages."
+                }
+            },
+            "options": {
+                "boolean": {
+                    "enabled": "Enabled",
+                    "disabled": "Disabled"
+                },
+                "dmPolicy": {
+                    "pairing": "Pairing approval required",
+                    "allowlist": "Allowlist only",
+                    "open": "Allow all DMs",
+                    "disabled": "Disable DMs"
+                },
+                "groupPolicy": {
+                    "open": "Allow all groups",
+                    "allowlist": "Allowlist only",
+                    "disabled": "Disable groups"
+                }
+            },
+            "instructions": [
+                "Create a self-built app in WeCom and copy Corp ID, Secret, and Agent ID",
+                "Configure callback URL, token, and EncodingAESKey for inbound messages",
+                "Clawy installs the openclaw-china wecom-app plugin automatically when you save",
+                "Save, restart the gateway, and test DM, group, or proactive delivery flows"
             ]
         },
         "signal": {

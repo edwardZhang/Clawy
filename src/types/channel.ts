@@ -9,6 +9,9 @@
 export type ChannelType =
   | 'whatsapp'
   | 'dingtalk'
+  | 'qqbot'
+  | 'wecom'
+  | 'wecom-app'
   | 'telegram'
   | 'discord'
   | 'signal'
@@ -81,6 +84,9 @@ export interface ChannelMeta {
 export const CHANNEL_ICONS: Record<ChannelType, string> = {
   whatsapp: '📱',
   dingtalk: '💬',
+  qqbot: '🐧',
+  wecom: '🏢',
+  'wecom-app': '🧩',
   telegram: '✈️',
   discord: '🎮',
   signal: '🔒',
@@ -99,6 +105,9 @@ export const CHANNEL_ICONS: Record<ChannelType, string> = {
 export const CHANNEL_NAMES: Record<ChannelType, string> = {
   whatsapp: 'WhatsApp',
   dingtalk: 'DingTalk',
+  qqbot: 'QQ Bot',
+  wecom: 'WeCom Bot',
+  'wecom-app': 'WeCom App',
   telegram: 'Telegram',
   discord: 'Discord',
   signal: 'Signal',
@@ -115,6 +124,335 @@ export const CHANNEL_NAMES: Record<ChannelType, string> = {
  * Channel metadata with configuration information
  */
 export const CHANNEL_META: Record<ChannelType, ChannelMeta> = {
+  qqbot: {
+    id: 'qqbot',
+    name: 'QQ Bot',
+    icon: '🐧',
+    description: 'channels:meta.qqbot.description',
+    connectionType: 'token',
+    docsUrl: 'channels:meta.qqbot.docsUrl',
+    configFields: [
+      {
+        key: 'appId',
+        label: 'channels:meta.qqbot.fields.appId.label',
+        type: 'text',
+        placeholder: 'channels:meta.qqbot.fields.appId.placeholder',
+        required: true,
+      },
+      {
+        key: 'clientSecret',
+        label: 'channels:meta.qqbot.fields.clientSecret.label',
+        type: 'password',
+        placeholder: 'channels:meta.qqbot.fields.clientSecret.placeholder',
+        required: true,
+      },
+      {
+        key: 'dmPolicy',
+        label: 'channels:meta.qqbot.fields.dmPolicy.label',
+        type: 'select',
+        description: 'channels:meta.qqbot.fields.dmPolicy.description',
+        defaultValue: 'open',
+        options: [
+          { value: 'open', label: 'channels:meta.qqbot.options.dmPolicy.open' },
+          { value: 'pairing', label: 'channels:meta.qqbot.options.dmPolicy.pairing' },
+          { value: 'allowlist', label: 'channels:meta.qqbot.options.dmPolicy.allowlist' },
+        ],
+      },
+      {
+        key: 'allowFrom',
+        label: 'channels:meta.qqbot.fields.allowFrom.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.qqbot.fields.allowFrom.placeholder',
+        description: 'channels:meta.qqbot.fields.allowFrom.description',
+      },
+      {
+        key: 'groupPolicy',
+        label: 'channels:meta.qqbot.fields.groupPolicy.label',
+        type: 'select',
+        description: 'channels:meta.qqbot.fields.groupPolicy.description',
+        defaultValue: 'open',
+        options: [
+          { value: 'open', label: 'channels:meta.qqbot.options.groupPolicy.open' },
+          { value: 'allowlist', label: 'channels:meta.qqbot.options.groupPolicy.allowlist' },
+          { value: 'disabled', label: 'channels:meta.qqbot.options.groupPolicy.disabled' },
+        ],
+      },
+      {
+        key: 'groupAllowFrom',
+        label: 'channels:meta.qqbot.fields.groupAllowFrom.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.qqbot.fields.groupAllowFrom.placeholder',
+        description: 'channels:meta.qqbot.fields.groupAllowFrom.description',
+      },
+      {
+        key: 'requireMention',
+        label: 'channels:meta.qqbot.fields.requireMention.label',
+        type: 'select',
+        description: 'channels:meta.qqbot.fields.requireMention.description',
+        defaultValue: 'true',
+        options: [
+          { value: 'true', label: 'channels:meta.qqbot.options.boolean.enabled' },
+          { value: 'false', label: 'channels:meta.qqbot.options.boolean.disabled' },
+        ],
+      },
+      {
+        key: 'autoSendLocalPathMedia',
+        label: 'channels:meta.qqbot.fields.autoSendLocalPathMedia.label',
+        type: 'select',
+        description: 'channels:meta.qqbot.fields.autoSendLocalPathMedia.description',
+        defaultValue: 'true',
+        options: [
+          { value: 'true', label: 'channels:meta.qqbot.options.boolean.enabled' },
+          { value: 'false', label: 'channels:meta.qqbot.options.boolean.disabled' },
+        ],
+      },
+    ],
+    instructions: [
+      'channels:meta.qqbot.instructions.0',
+      'channels:meta.qqbot.instructions.1',
+      'channels:meta.qqbot.instructions.2',
+      'channels:meta.qqbot.instructions.3',
+    ],
+    isPlugin: true,
+  },
+  wecom: {
+    id: 'wecom',
+    name: 'WeCom Bot',
+    icon: '🏢',
+    description: 'channels:meta.wecom.description',
+    connectionType: 'token',
+    docsUrl: 'channels:meta.wecom.docsUrl',
+    configFields: [
+      {
+        key: 'mode',
+        label: 'channels:meta.wecom.fields.mode.label',
+        type: 'select',
+        description: 'channels:meta.wecom.fields.mode.description',
+        defaultValue: 'ws',
+        options: [
+          { value: 'ws', label: 'channels:meta.wecom.options.mode.ws' },
+          { value: 'webhook', label: 'channels:meta.wecom.options.mode.webhook' },
+        ],
+      },
+      {
+        key: 'botId',
+        label: 'channels:meta.wecom.fields.botId.label',
+        type: 'text',
+        placeholder: 'channels:meta.wecom.fields.botId.placeholder',
+      },
+      {
+        key: 'secret',
+        label: 'channels:meta.wecom.fields.secret.label',
+        type: 'password',
+        placeholder: 'channels:meta.wecom.fields.secret.placeholder',
+      },
+      {
+        key: 'webhookPath',
+        label: 'channels:meta.wecom.fields.webhookPath.label',
+        type: 'text',
+        placeholder: 'channels:meta.wecom.fields.webhookPath.placeholder',
+      },
+      {
+        key: 'token',
+        label: 'channels:meta.wecom.fields.token.label',
+        type: 'password',
+        placeholder: 'channels:meta.wecom.fields.token.placeholder',
+      },
+      {
+        key: 'encodingAESKey',
+        label: 'channels:meta.wecom.fields.encodingAESKey.label',
+        type: 'password',
+        placeholder: 'channels:meta.wecom.fields.encodingAESKey.placeholder',
+      },
+      {
+        key: 'publicBaseUrl',
+        label: 'channels:meta.wecom.fields.publicBaseUrl.label',
+        type: 'text',
+        placeholder: 'channels:meta.wecom.fields.publicBaseUrl.placeholder',
+      },
+      {
+        key: 'welcomeText',
+        label: 'channels:meta.wecom.fields.welcomeText.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.wecom.fields.welcomeText.placeholder',
+      },
+      {
+        key: 'dmPolicy',
+        label: 'channels:meta.wecom.fields.dmPolicy.label',
+        type: 'select',
+        description: 'channels:meta.wecom.fields.dmPolicy.description',
+        defaultValue: 'pairing',
+        options: [
+          { value: 'pairing', label: 'channels:meta.wecom.options.dmPolicy.pairing' },
+          { value: 'allowlist', label: 'channels:meta.wecom.options.dmPolicy.allowlist' },
+          { value: 'open', label: 'channels:meta.wecom.options.dmPolicy.open' },
+          { value: 'disabled', label: 'channels:meta.wecom.options.dmPolicy.disabled' },
+        ],
+      },
+      {
+        key: 'allowFrom',
+        label: 'channels:meta.wecom.fields.allowFrom.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.wecom.fields.allowFrom.placeholder',
+        description: 'channels:meta.wecom.fields.allowFrom.description',
+      },
+      {
+        key: 'groupPolicy',
+        label: 'channels:meta.wecom.fields.groupPolicy.label',
+        type: 'select',
+        description: 'channels:meta.wecom.fields.groupPolicy.description',
+        defaultValue: 'open',
+        options: [
+          { value: 'open', label: 'channels:meta.wecom.options.groupPolicy.open' },
+          { value: 'allowlist', label: 'channels:meta.wecom.options.groupPolicy.allowlist' },
+          { value: 'disabled', label: 'channels:meta.wecom.options.groupPolicy.disabled' },
+        ],
+      },
+      {
+        key: 'groupAllowFrom',
+        label: 'channels:meta.wecom.fields.groupAllowFrom.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.wecom.fields.groupAllowFrom.placeholder',
+        description: 'channels:meta.wecom.fields.groupAllowFrom.description',
+      },
+      {
+        key: 'requireMention',
+        label: 'channels:meta.wecom.fields.requireMention.label',
+        type: 'select',
+        description: 'channels:meta.wecom.fields.requireMention.description',
+        defaultValue: 'true',
+        options: [
+          { value: 'true', label: 'channels:meta.wecom.options.boolean.enabled' },
+          { value: 'false', label: 'channels:meta.wecom.options.boolean.disabled' },
+        ],
+      },
+    ],
+    instructions: [
+      'channels:meta.wecom.instructions.0',
+      'channels:meta.wecom.instructions.1',
+      'channels:meta.wecom.instructions.2',
+      'channels:meta.wecom.instructions.3',
+    ],
+    isPlugin: true,
+  },
+  'wecom-app': {
+    id: 'wecom-app',
+    name: 'WeCom App',
+    icon: '🧩',
+    description: 'channels:meta.wecomApp.description',
+    connectionType: 'token',
+    docsUrl: 'channels:meta.wecomApp.docsUrl',
+    configFields: [
+      {
+        key: 'corpId',
+        label: 'channels:meta.wecomApp.fields.corpId.label',
+        type: 'text',
+        placeholder: 'channels:meta.wecomApp.fields.corpId.placeholder',
+        required: true,
+      },
+      {
+        key: 'corpSecret',
+        label: 'channels:meta.wecomApp.fields.corpSecret.label',
+        type: 'password',
+        placeholder: 'channels:meta.wecomApp.fields.corpSecret.placeholder',
+        required: true,
+      },
+      {
+        key: 'agentId',
+        label: 'channels:meta.wecomApp.fields.agentId.label',
+        type: 'text',
+        placeholder: 'channels:meta.wecomApp.fields.agentId.placeholder',
+        required: true,
+      },
+      {
+        key: 'webhookPath',
+        label: 'channels:meta.wecomApp.fields.webhookPath.label',
+        type: 'text',
+        placeholder: 'channels:meta.wecomApp.fields.webhookPath.placeholder',
+      },
+      {
+        key: 'token',
+        label: 'channels:meta.wecomApp.fields.token.label',
+        type: 'password',
+        placeholder: 'channels:meta.wecomApp.fields.token.placeholder',
+      },
+      {
+        key: 'encodingAESKey',
+        label: 'channels:meta.wecomApp.fields.encodingAESKey.label',
+        type: 'password',
+        placeholder: 'channels:meta.wecomApp.fields.encodingAESKey.placeholder',
+      },
+      {
+        key: 'apiBaseUrl',
+        label: 'channels:meta.wecomApp.fields.apiBaseUrl.label',
+        type: 'text',
+        placeholder: 'channels:meta.wecomApp.fields.apiBaseUrl.placeholder',
+      },
+      {
+        key: 'welcomeText',
+        label: 'channels:meta.wecomApp.fields.welcomeText.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.wecomApp.fields.welcomeText.placeholder',
+      },
+      {
+        key: 'dmPolicy',
+        label: 'channels:meta.wecomApp.fields.dmPolicy.label',
+        type: 'select',
+        description: 'channels:meta.wecomApp.fields.dmPolicy.description',
+        defaultValue: 'pairing',
+        options: [
+          { value: 'pairing', label: 'channels:meta.wecomApp.options.dmPolicy.pairing' },
+          { value: 'allowlist', label: 'channels:meta.wecomApp.options.dmPolicy.allowlist' },
+          { value: 'open', label: 'channels:meta.wecomApp.options.dmPolicy.open' },
+          { value: 'disabled', label: 'channels:meta.wecomApp.options.dmPolicy.disabled' },
+        ],
+      },
+      {
+        key: 'allowFrom',
+        label: 'channels:meta.wecomApp.fields.allowFrom.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.wecomApp.fields.allowFrom.placeholder',
+        description: 'channels:meta.wecomApp.fields.allowFrom.description',
+      },
+      {
+        key: 'groupPolicy',
+        label: 'channels:meta.wecomApp.fields.groupPolicy.label',
+        type: 'select',
+        description: 'channels:meta.wecomApp.fields.groupPolicy.description',
+        defaultValue: 'open',
+        options: [
+          { value: 'open', label: 'channels:meta.wecomApp.options.groupPolicy.open' },
+          { value: 'allowlist', label: 'channels:meta.wecomApp.options.groupPolicy.allowlist' },
+          { value: 'disabled', label: 'channels:meta.wecomApp.options.groupPolicy.disabled' },
+        ],
+      },
+      {
+        key: 'groupAllowFrom',
+        label: 'channels:meta.wecomApp.fields.groupAllowFrom.label',
+        type: 'textarea',
+        placeholder: 'channels:meta.wecomApp.fields.groupAllowFrom.placeholder',
+        description: 'channels:meta.wecomApp.fields.groupAllowFrom.description',
+      },
+      {
+        key: 'requireMention',
+        label: 'channels:meta.wecomApp.fields.requireMention.label',
+        type: 'select',
+        description: 'channels:meta.wecomApp.fields.requireMention.description',
+        defaultValue: 'true',
+        options: [
+          { value: 'true', label: 'channels:meta.wecomApp.options.boolean.enabled' },
+          { value: 'false', label: 'channels:meta.wecomApp.options.boolean.disabled' },
+        ],
+      },
+    ],
+    instructions: [
+      'channels:meta.wecomApp.instructions.0',
+      'channels:meta.wecomApp.instructions.1',
+      'channels:meta.wecomApp.instructions.2',
+      'channels:meta.wecomApp.instructions.3',
+    ],
+    isPlugin: true,
+  },
   dingtalk: {
     id: 'dingtalk',
     name: 'DingTalk',
@@ -598,7 +936,17 @@ export const CHANNEL_META: Record<ChannelType, ChannelMeta> = {
  * Get primary supported channels (non-plugin, commonly used)
  */
 export function getPrimaryChannels(): ChannelType[] {
-  return ['telegram', 'discord', 'whatsapp', 'dingtalk', 'feishu', 'matrix'];
+  return [
+    'telegram',
+    'discord',
+    'whatsapp',
+    'qqbot',
+    'dingtalk',
+    'wecom',
+    'wecom-app',
+    'feishu',
+    'matrix',
+  ];
 }
 
 export function getDefaultChannelConfigValues(type: ChannelType): Record<string, string> {
