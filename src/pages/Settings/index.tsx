@@ -456,10 +456,12 @@ export function Settings() {
     const timeoutId = window.setTimeout(() => {
       window.requestAnimationFrame(() => {
         if (!cancelled) {
-          void loadOpenClawRuntimeStatus(false, 'summary');
+          void desktopApi.ipcRenderer.invoke('openclaw:refreshUpdateStatus', { mode: 'summary' }).catch(() => {
+            void loadOpenClawRuntimeStatus(false, 'summary');
+          });
         }
       });
-    }, 120);
+    }, 600);
 
     return () => {
       cancelled = true;

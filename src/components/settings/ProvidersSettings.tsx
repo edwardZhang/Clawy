@@ -91,7 +91,7 @@ export function ProvidersSettings() {
 
   // Fetch providers on mount
   useEffect(() => {
-    fetchProviders();
+    void fetchProviders();
   }, [fetchProviders]);
 
   const handleAddProvider = async (
@@ -810,7 +810,7 @@ function AddProviderDialog({
       // So we just fetch the latest list from the backend to update the UI.
       try {
         const store = useProviderStore.getState();
-        await store.fetchProviders();
+        await store.fetchProviders({ force: true });
 
         // Auto-set as default if no default is currently configured
         if (!store.defaultProviderId && latestRef.current.effectiveSelectedType) {

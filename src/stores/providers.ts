@@ -14,9 +14,11 @@ interface ProviderState {
   defaultProviderId: string | null;
   loading: boolean;
   error: string | null;
+  isInitialized: boolean;
+  lastFetchedAt: number | null;
   
   // Actions
-  fetchProviders: () => Promise<void>;
+  fetchProviders: (options?: { force?: boolean }) => Promise<void>;
   addProvider: (config: Omit<ProviderConfig, 'createdAt' | 'updatedAt'>, apiKey?: string) => Promise<void>;
   addProviderWithToken: (config: Omit<ProviderConfig, 'createdAt' | 'updatedAt'>, token: string) => Promise<void>;
   updateProvider: (providerId: string, updates: Partial<ProviderConfig>, apiKey?: string) => Promise<void>;
@@ -47,18 +49,36 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
   defaultProviderId: null,
   loading: false,
   error: null,
+  isInitialized: false,
+  lastFetchedAt: null,
   
-  fetchProviders: async () => {
+  fetchProviders: async (options) => {
+    const force = options?.force === true;
+    const { loading, isInitialized, lastFetchedAt } = get();
+    if (loading) {
+      return;
+    }
+
+    const now = Date.now();
+    const isFresh = isInitialized && lastFetchedAt != null && now - lastFetchedAt < 60_000;
+    if (!force && isFresh) {
+      return;
+    }
+
     set({ loading: true, error: null });
     
     try {
-      const providers = await desktopApi.ipcRenderer.invoke('provider:list') as ProviderWithKeyInfo[];
-      const defaultId = await desktopApi.ipcRenderer.invoke('provider:getDefault') as string | null;
+      const [providers, defaultId] = await Promise.all([
+        desktopApi.ipcRenderer.invoke('provider:list') as Promise<ProviderWithKeyInfo[]>,
+        desktopApi.ipcRenderer.invoke('provider:getDefault') as Promise<string | null>,
+      ]);
       
       set({ 
         providers, 
         defaultProviderId: defaultId,
-        loading: false 
+        loading: false,
+        isInitialized: true,
+        lastFetchedAt: Date.now(),
       });
     } catch (error) {
       set({ error: String(error), loading: false });
@@ -80,7 +100,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       }
       
       // Refresh the list
-      await get().fetchProviders();
+      await get().fetchProviders({ force: true });
     } catch (error) {
       console.error('Failed to add provider:', error);
       throw error;
@@ -105,7 +125,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
         throw new Error(result.error || 'Failed to save provider token auth');
       }
 
-      await get().fetchProviders();
+      await get().fetchProviders({ force: true });
     } catch (error) {
       console.error('Failed to add provider with token:', error);
       throw error;
@@ -134,7 +154,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       }
       
       // Refresh the list
-      await get().fetchProviders();
+      await get().fetchProviders({ force: true });
     } catch (error) {
       console.error('Failed to update provider:', error);
       throw error;
@@ -166,7 +186,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
         throw new Error(result.error || 'Failed to update provider token auth');
       }
 
-      await get().fetchProviders();
+      await get().fetchProviders({ force: true });
     } catch (error) {
       console.error('Failed to update provider with token:', error);
       throw error;
@@ -182,7 +202,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       }
       
       // Refresh the list
-      await get().fetchProviders();
+      await get().fetchProviders({ force: true });
     } catch (error) {
       console.error('Failed to delete provider:', error);
       throw error;
@@ -198,7 +218,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       }
       
       // Refresh the list
-      await get().fetchProviders();
+      await get().fetchProviders({ force: true });
     } catch (error) {
       console.error('Failed to set API key:', error);
       throw error;
@@ -218,7 +238,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
         throw new Error(result.error || 'Failed to update provider');
       }
 
-      await get().fetchProviders();
+      await get().fetchProviders({ force: true });
     } catch (error) {
       console.error('Failed to update provider with key:', error);
       throw error;
@@ -234,7 +254,7 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
       }
       
       // Refresh the list
-      await get().fetchProviders();
+      await get().fetchProviders({ force: true });
     } catch (error) {
       console.error('Failed to delete API key:', error);
       throw error;
