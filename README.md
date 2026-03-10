@@ -58,7 +58,10 @@ Clawy keeps the desktop layer lean while preserving the capabilities that matter
 
 ### Lightweight desktop shell
 
-Clawy is rebuilt with **Tauri**, which means lower shell overhead, smaller distribution size, and a snappier desktop feel than a heavy bundled-browser architecture.
+Clawy is rebuilt with **Tauri**, which means lower shell overhead, smaller distribution size, and a snappier desktop feel than a heavy bundled-browser architecture. The current Lite package footprint stays compact:
+
+- Windows package: about **5.5 MB**
+- macOS package: about **9.9 MB**
 
 ### Fast startup and responsive UI
 
@@ -75,6 +78,40 @@ Clawy is designed to provision the OpenClaw service automatically and keep it ma
 ### Independent OpenClaw updates
 
 Because the OpenClaw runtime can be managed independently, service updates can move faster and stay decoupled from desktop-shell iteration.
+
+### Built-in OpenClaw version detection and one-click updates
+
+Clawy includes built-in OpenClaw version detection, making it possible to inspect the current runtime version, available updates, and recommended versions directly from the desktop UI, then update to the latest version with one click.
+
+### Broad channel integrations
+
+Clawy already integrates a wide range of channel connectors for OpenClaw workflows, including:
+
+- Feishu
+- QQ
+- WeCom
+- Personal WeChat (testing)
+- DingTalk
+- Matrix
+- Discord
+- Telegram
+- WhatsApp
+
+### Model API access and authentication flows
+
+Clawy supports mainstream model API access patterns while also covering official authentication flows and third-party compatible endpoints:
+
+- supports third-party API protocols based on `chat-completions` and `openai-responses`
+- supports OAuth authentication for Codex, Claude Code, MiniMax, Qwen, and similar model services
+- supports custom provider configuration for proxy gateways, OpenAI-compatible platforms, and private deployments
+
+### Real-time token usage visibility
+
+Clawy includes a token usage viewer so users can inspect token consumption more directly, helping them understand input, output, and overall usage at a glance.
+
+### Simplified OpenClaw configuration with developer access when needed
+
+Clawy extracts and surfaces the most important OpenClaw configuration paths through the desktop UI, reducing the need to edit low-level configuration files manually. For advanced usage, developer mode can unlock direct access to the OpenClaw control console.
 
 ### Full desktop workflow for OpenClaw
 
