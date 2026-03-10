@@ -55,11 +55,11 @@ import {
 } from '@/types/channel';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
-import dingTalkIconUrl from '../../../resources/dingtalk.svg';
-import feishuIconUrl from '../../../resources/feishu.svg';
-import qqIconUrl from '../../../resources/QQ.svg';
-import wecomBotIconUrl from '../../../resources/wechat.svg';
-import wecomAppIconUrl from '../../../resources/wecomapp.svg';
+import dingTalkIconUrl from '@/assets/channel-icons/dingtalk.svg';
+import feishuIconUrl from '@/assets/channel-icons/feishu.svg';
+import qqIconUrl from '@/assets/channel-icons/QQ.svg';
+import wecomBotIconUrl from '@/assets/channel-icons/wechat.svg';
+import wecomAppIconUrl from '@/assets/channel-icons/wecomapp.svg';
 
 function renderChannelBrandIcon(type: ChannelType, className: string) {
   const imageClassName = `${className} object-contain`;
