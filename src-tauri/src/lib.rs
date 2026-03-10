@@ -4504,37 +4504,73 @@ fn sync_provider_config_to_openclaw(
     write_openclaw_json(&config)
 }
 
+fn sync_openclaw_agent_model(config: &mut Value, agent_id: &str, model_ref: &str) {
+    let root = ensure_object(config);
+    let agents = root
+        .entry("agents")
+        .or_insert_with(|| Value::Object(Map::new()));
+    let agents_obj = ensure_object(agents);
+    let list = agents_obj
+        .entry("list")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !list.is_array() {
+        *list = Value::Array(Vec::new());
+    }
+    let Some(list_array) = list.as_array_mut() else {
+        return;
+    };
+
+    for entry in list_array.iter_mut() {
+        let Some(agent_obj) = entry.as_object_mut() else {
+            continue;
+        };
+        if agent_obj.get("id").and_then(Value::as_str) == Some(agent_id) {
+            agent_obj.insert("model".into(), Value::String(model_ref.to_string()));
+            return;
+        }
+    }
+
+    list_array.push(json!({
+        "id": agent_id,
+        "model": model_ref,
+    }));
+}
+
 fn set_openclaw_default_model(
     _provider_key: &str,
     model_ref: &str,
     fallback_models: &[String],
 ) -> Result<(), String> {
     let mut config = read_openclaw_json()?;
-    let root = ensure_object(&mut config);
-
-    let agents = root
-        .entry("agents")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let agents_obj = ensure_object(agents);
-    let defaults = agents_obj
-        .entry("defaults")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let defaults_obj = ensure_object(defaults);
-    defaults_obj.insert(
-        "model".into(),
-        json!({
-            "primary": model_ref,
-            "fallbacks": fallback_models,
-        }),
-    );
-
-    let gateway = root
-        .entry("gateway")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let gateway_obj = ensure_object(gateway);
-    gateway_obj
-        .entry("mode")
-        .or_insert_with(|| Value::String("local".into()));
+    {
+        let root = ensure_object(&mut config);
+        let agents = root
+            .entry("agents")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let agents_obj = ensure_object(agents);
+        let defaults = agents_obj
+            .entry("defaults")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let defaults_obj = ensure_object(defaults);
+        defaults_obj.insert(
+            "model".into(),
+            json!({
+                "primary": model_ref,
+                "fallbacks": fallback_models,
+            }),
+        );
+    }
+    sync_openclaw_agent_model(&mut config, "main", model_ref);
+    {
+        let root = ensure_object(&mut config);
+        let gateway = root
+            .entry("gateway")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let gateway_obj = ensure_object(gateway);
+        gateway_obj
+            .entry("mode")
+            .or_insert_with(|| Value::String("local".into()));
+    }
 
     write_openclaw_json(&config)
 }
@@ -4551,31 +4587,35 @@ fn set_openclaw_default_model_with_override(
     auth_header: Option<bool>,
 ) -> Result<(), String> {
     let mut config = read_openclaw_json()?;
-    let root = ensure_object(&mut config);
-
-    let agents = root
-        .entry("agents")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let agents_obj = ensure_object(agents);
-    let defaults = agents_obj
-        .entry("defaults")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let defaults_obj = ensure_object(defaults);
-    defaults_obj.insert(
-        "model".into(),
-        json!({
-            "primary": model_ref,
-            "fallbacks": fallback_models,
-        }),
-    );
-
-    let gateway = root
-        .entry("gateway")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let gateway_obj = ensure_object(gateway);
-    gateway_obj
-        .entry("mode")
-        .or_insert_with(|| Value::String("local".into()));
+    {
+        let root = ensure_object(&mut config);
+        let agents = root
+            .entry("agents")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let agents_obj = ensure_object(agents);
+        let defaults = agents_obj
+            .entry("defaults")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let defaults_obj = ensure_object(defaults);
+        defaults_obj.insert(
+            "model".into(),
+            json!({
+                "primary": model_ref,
+                "fallbacks": fallback_models,
+            }),
+        );
+    }
+    sync_openclaw_agent_model(&mut config, "main", model_ref);
+    {
+        let root = ensure_object(&mut config);
+        let gateway = root
+            .entry("gateway")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let gateway_obj = ensure_object(gateway);
+        gateway_obj
+            .entry("mode")
+            .or_insert_with(|| Value::String("local".into()));
+    }
 
     if let (Some(base_url), Some(api)) = (base_url, api) {
         let mut model_refs = vec![model_ref.to_string()];
@@ -11483,6 +11523,76 @@ mod tests {
             assert_eq!(
                 provider_entry.get("api").and_then(Value::as_str),
                 Some("openai-completions")
+            );
+        });
+    }
+
+    #[test]
+    fn set_openclaw_default_model_updates_main_agent_model() {
+        let test_dir = TestDir::new("default-model-updates-main-agent");
+
+        with_temp_home_dir(&test_dir, |_home_dir| {
+            write_openclaw_json(&json!({
+                "agents": {
+                    "defaults": {
+                        "model": {
+                            "primary": "openai-codex/gpt-5.3-codex",
+                            "fallbacks": []
+                        }
+                    },
+                    "list": [
+                        {
+                            "id": "main",
+                            "model": "openai-codex/gpt-5.3-codex"
+                        },
+                        {
+                            "id": "work",
+                            "model": "custom-customfb/qwen3-coder-plus"
+                        }
+                    ]
+                }
+            }))
+            .expect("seed openclaw config");
+
+            set_openclaw_default_model("ollama-ollama", "ollama-ollama/1", &[])
+                .expect("set default model");
+
+            let openclaw = read_openclaw_json().expect("read openclaw.json");
+            assert_eq!(
+                openclaw
+                    .get("agents")
+                    .and_then(Value::as_object)
+                    .and_then(|agents| agents.get("defaults"))
+                    .and_then(Value::as_object)
+                    .and_then(|defaults| defaults.get("model"))
+                    .and_then(Value::as_object)
+                    .and_then(|model| model.get("primary"))
+                    .and_then(Value::as_str),
+                Some("ollama-ollama/1")
+            );
+
+            let agents = openclaw
+                .get("agents")
+                .and_then(Value::as_object)
+                .and_then(|agents| agents.get("list"))
+                .and_then(Value::as_array)
+                .expect("agents.list");
+
+            assert_eq!(
+                agents
+                    .iter()
+                    .find(|entry| entry.get("id").and_then(Value::as_str) == Some("main"))
+                    .and_then(|entry| entry.get("model"))
+                    .and_then(Value::as_str),
+                Some("ollama-ollama/1")
+            );
+            assert_eq!(
+                agents
+                    .iter()
+                    .find(|entry| entry.get("id").and_then(Value::as_str) == Some("work"))
+                    .and_then(|entry| entry.get("model"))
+                    .and_then(Value::as_str),
+                Some("custom-customfb/qwen3-coder-plus")
             );
         });
     }
