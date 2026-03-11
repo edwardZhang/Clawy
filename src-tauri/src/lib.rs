@@ -6,7 +6,7 @@ use reqwest::{NoProxy, Proxy};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
@@ -52,7 +52,8 @@ const MANAGED_UV_DIR_NAME: &str = "uv";
 const MANAGED_UV_CURRENT_DIR_NAME: &str = "current";
 const MANAGED_UV_VERSION_FILE_NAME: &str = "version";
 const OPENCLAW_PACKAGE_NAME: &str = "openclaw";
-const OPENCLAW_NPM_REGISTRY_BASE_URL: &str = "https://registry.npmjs.org";
+const OPENCLAW_RUNTIME_RELEASES_BASE_URL: &str =
+    "https://clawy-releases.oss-cn-shenzhen.aliyuncs.com/openclaw";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -524,28 +525,37 @@ struct ManagedOpenClawInstallResult {
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenClawRegistryReleaseMetadata {
-    name: String,
-    version: String,
-    dist: OpenClawRegistryDistMetadata,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenClawRegistryPackageMetadata {
-    #[serde(rename = "dist-tags")]
-    dist_tags: HashMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenClawRegistryDistMetadata {
-    tarball: String,
-    integrity: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct OpenClawPackageMetadata {
     name: String,
     version: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawRuntimeReleaseManifest {
+    version: String,
+    downloads: OpenClawRuntimeDownloads,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct OpenClawRuntimeDownloads {
+    mac: Option<OpenClawRuntimePlatformDownloads>,
+    win: Option<OpenClawRuntimePlatformDownloads>,
+    linux: Option<OpenClawRuntimePlatformDownloads>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct OpenClawRuntimePlatformDownloads {
+    x64: Option<OpenClawRuntimeDownloadArtifact>,
+    arm64: Option<OpenClawRuntimeDownloadArtifact>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenClawRuntimeDownloadArtifact {
+    #[serde(default, alias = "url", alias = "archiveUrl")]
+    download_url: Option<String>,
+    sha256: String,
 }
 
 #[derive(Debug, Clone)]
@@ -553,7 +563,7 @@ struct ManagedOpenClawDownloadTarget {
     version: String,
     archive_url: String,
     file_name: String,
-    integrity: String,
+    sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1473,7 +1483,7 @@ fn write_text_atomically(path: &Path, contents: &str) -> Result<(), String> {
 fn normalized_sha256_hex(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized.len() != 64 || !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err("Managed Node archive SHA-256 must be a 64-character hex string".into());
+        return Err("Archive SHA-256 must be a 64-character hex string".into());
     }
 
     Ok(normalized)
@@ -1503,65 +1513,7 @@ fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> 
     }
 
     Err(format!(
-        "Managed Node archive checksum mismatch for {}: expected {expected}, got {actual}",
-        path.to_string_lossy()
-    ))
-}
-
-fn verify_file_integrity(path: &Path, integrity: &str) -> Result<(), String> {
-    let trimmed = integrity.trim();
-    let (algorithm, encoded_expected) = trimmed
-        .split_once('-')
-        .ok_or_else(|| format!("Unsupported integrity format `{trimmed}`"))?;
-    let expected = STANDARD
-        .decode(encoded_expected)
-        .map_err(|err| format!("Invalid integrity value `{trimmed}`: {err}"))?;
-
-    let actual = match algorithm {
-        "sha512" => {
-            let mut file = File::open(path).map_err(|err| err.to_string())?;
-            let mut hasher = Sha512::new();
-            let mut buffer = [0_u8; 8192];
-
-            loop {
-                let read = file.read(&mut buffer).map_err(|err| err.to_string())?;
-                if read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..read]);
-            }
-
-            hasher.finalize().to_vec()
-        }
-        "sha256" => {
-            let mut file = File::open(path).map_err(|err| err.to_string())?;
-            let mut hasher = Sha256::new();
-            let mut buffer = [0_u8; 8192];
-
-            loop {
-                let read = file.read(&mut buffer).map_err(|err| err.to_string())?;
-                if read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..read]);
-            }
-
-            hasher.finalize().to_vec()
-        }
-        _ => {
-            return Err(format!(
-                "Unsupported integrity algorithm `{algorithm}` for {}",
-                path.to_string_lossy()
-            ));
-        }
-    };
-
-    if actual == expected {
-        return Ok(());
-    }
-
-    Err(format!(
-        "Managed OpenClaw archive integrity mismatch for {}",
+        "Archive checksum mismatch for {}: expected {expected}, got {actual}",
         path.to_string_lossy()
     ))
 }
@@ -2246,117 +2198,8 @@ fn prepare_managed_node_runtime_dir(root: &Path) -> Result<(), String> {
     ensure_unix_executable(&node_binary)
 }
 
-fn runtime_root_from_node_binary(node_binary: &Path) -> PathBuf {
-    if cfg!(windows) {
-        return node_binary
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-    }
-
-    let parent = node_binary
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    if parent
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(|value| value == "bin")
-        .unwrap_or(false)
-    {
-        return parent.parent().map(Path::to_path_buf).unwrap_or(parent);
-    }
-
-    parent
-}
-
-fn npm_cli_path_for_node_binary(node_binary: &Path) -> Option<PathBuf> {
-    let runtime_root = runtime_root_from_node_binary(node_binary);
-    let npm_cli = runtime_root
-        .join("lib")
-        .join("node_modules")
-        .join("npm")
-        .join("bin")
-        .join("npm-cli.js");
-    npm_cli.exists().then_some(npm_cli)
-}
-
-fn npm_cache_dir_from_base(base_dir: &Path) -> PathBuf {
-    base_dir.join(MANAGED_RUNTIME_DIR_NAME).join("npm-cache")
-}
-
-fn install_openclaw_dependencies_in_base(base_dir: &Path, root: &Path) -> Result<(), String> {
-    let node_resolution = resolve_node_binary();
-    let Some(node_binary) = node_resolution.path.clone() else {
-        return Err(format!(
-            "No compatible Node.js runtime available for OpenClaw dependency installation: {}",
-            node_resolution.failure_message()
-        ));
-    };
-
-    let node_binary_dir = node_binary
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let existing_path = std::env::var_os("PATH").unwrap_or_default();
-    let mut combined_path = std::ffi::OsString::new();
-    combined_path.push(node_binary_dir.as_os_str());
-    combined_path.push(std::ffi::OsStr::new(if cfg!(windows) { ";" } else { ":" }));
-    combined_path.push(existing_path);
-
-    let mut command = if let Some(npm_cli) = npm_cli_path_for_node_binary(&node_binary) {
-        let mut command = Command::new(&node_binary);
-        command.arg(npm_cli);
-        command
-    } else if cfg!(windows) {
-        Command::new("npm.cmd")
-    } else {
-        Command::new("npm")
-    };
-
-    apply_proxy_env(&mut command, &load_settings());
-    command
-        .arg("install")
-        .arg("--omit=dev")
-        .arg("--include=optional")
-        .arg("--no-package-lock")
-        .arg("--fund=false")
-        .arg("--audit=false")
-        .arg("--prefer-online")
-        .current_dir(root)
-        .env("PATH", combined_path)
-        .env("npm_config_cache", npm_cache_dir_from_base(base_dir))
-        .env("npm_config_update_notifier", "false")
-        .env("npm_config_yes", "true")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let output = command
-        .output()
-        .map_err(|err| format!("Failed to install OpenClaw dependencies: {err}"))?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let detail = if !stderr.is_empty() {
-        stderr
-    } else if !stdout.is_empty() {
-        stdout
-    } else {
-        format!("exit code {:?}", output.status.code())
-    };
-    Err(format!("Failed to install OpenClaw dependencies: {detail}"))
-}
-
 fn prepare_managed_openclaw_runtime_dir(root: &Path, expected_version: &str) -> Result<(), String> {
     collapse_single_extracted_root_directory(root)?;
-    if !root.join("node_modules").is_dir() {
-        install_openclaw_dependencies_in_base(&clawy_base_dir(), root)?;
-    }
     validate_managed_openclaw_runtime_dir(root, Some(expected_version))
 }
 
@@ -2481,116 +2324,179 @@ fn resolve_recommended_managed_node_payload_with_client(
     })
 }
 
-fn openclaw_registry_release_url(registry_base_url: &str, version: &str) -> String {
-    format!(
-        "{}/{}/{}",
-        registry_base_url.trim_end_matches('/'),
-        OPENCLAW_PACKAGE_NAME,
-        version
-    )
+fn openclaw_distribution_os() -> Result<&'static str, String> {
+    match std::env::consts::OS {
+        "macos" => Ok("mac"),
+        "windows" => Ok("win"),
+        "linux" => Ok("linux"),
+        other => Err(format!(
+            "Managed OpenClaw downloads are not supported on `{other}`"
+        )),
+    }
 }
 
-fn openclaw_registry_package_url(registry_base_url: &str) -> String {
-    format!(
-        "{}/{}",
-        registry_base_url.trim_end_matches('/'),
-        OPENCLAW_PACKAGE_NAME
-    )
+fn openclaw_distribution_arch() -> Result<&'static str, String> {
+    match std::env::consts::ARCH {
+        "aarch64" => Ok("arm64"),
+        "x86_64" => Ok("x64"),
+        other => Err(format!(
+            "Managed OpenClaw downloads are not supported on `{other}`"
+        )),
+    }
 }
 
-fn fetch_openclaw_registry_latest_version() -> Result<String, String> {
-    let client = reqwest_client()?;
-    let metadata = client
-        .get(openclaw_registry_package_url(
-            OPENCLAW_NPM_REGISTRY_BASE_URL,
-        ))
+fn recommended_openclaw_archive_name(version: &str) -> Result<String, String> {
+    let os = openclaw_distribution_os()?;
+    let arch = openclaw_distribution_arch()?;
+    Ok(format!("openclaw-{os}-{arch}-{version}.zip"))
+}
+
+fn openclaw_runtime_release_manifest_url_for_base(base_url: &str) -> String {
+    format!("{}/release-info.json", base_url.trim_end_matches('/'))
+}
+
+fn openclaw_runtime_release_manifest_url() -> String {
+    openclaw_runtime_release_manifest_url_for_base(OPENCLAW_RUNTIME_RELEASES_BASE_URL)
+}
+
+fn resolve_openclaw_runtime_archive_url_for_base(
+    base_url: &str,
+    path: Option<&str>,
+    version: &str,
+) -> Result<String, String> {
+    match path.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) if value.starts_with("http://") || value.starts_with("https://") => {
+            Ok(value.to_string())
+        }
+        Some(value) => Ok(format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            value.trim_start_matches('/')
+        )),
+        None => Ok(format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            recommended_openclaw_archive_name(version)?
+        )),
+    }
+}
+
+fn fetch_openclaw_runtime_release_manifest_with_client_and_base_url(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+) -> Result<OpenClawRuntimeReleaseManifest, String> {
+    client
+        .get(openclaw_runtime_release_manifest_url_for_base(base_url))
         .send()
-        .map_err(|err| format!("Failed to resolve OpenClaw dist-tags: {err}"))?
+        .map_err(|err| format!("Failed to fetch OpenClaw runtime release manifest: {err}"))?
         .error_for_status()
-        .map_err(|err| format!("OpenClaw dist-tags request failed: {err}"))?
-        .json::<OpenClawRegistryPackageMetadata>()
-        .map_err(|err| format!("Failed to parse OpenClaw dist-tags: {err}"))?;
-
-    metadata
-        .dist_tags
-        .get("latest")
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "OpenClaw registry did not return a latest dist-tag".to_string())
+        .map_err(|err| format!("OpenClaw runtime release manifest request failed: {err}"))?
+        .json::<OpenClawRuntimeReleaseManifest>()
+        .map_err(|err| format!("Failed to parse OpenClaw runtime release manifest: {err}"))
 }
 
-fn resolve_managed_openclaw_download_target_with_client_and_registry(
+fn fetch_openclaw_runtime_release_manifest_with_client(
+    client: &reqwest::blocking::Client,
+) -> Result<OpenClawRuntimeReleaseManifest, String> {
+    client
+        .get(openclaw_runtime_release_manifest_url())
+        .send()
+        .map_err(|err| format!("Failed to fetch OpenClaw runtime release manifest: {err}"))?
+        .error_for_status()
+        .map_err(|err| format!("OpenClaw runtime release manifest request failed: {err}"))?
+        .json::<OpenClawRuntimeReleaseManifest>()
+        .map_err(|err| format!("Failed to parse OpenClaw runtime release manifest: {err}"))
+}
+
+fn fetch_latest_openclaw_runtime_version() -> Result<String, String> {
+    let client = reqwest_client()?;
+    let manifest = fetch_openclaw_runtime_release_manifest_with_client(&client)?;
+    let version = manifest.version.trim();
+    if version.is_empty() {
+        return Err("OpenClaw runtime release manifest is missing a version".into());
+    }
+    Ok(version.to_string())
+}
+
+fn resolve_openclaw_runtime_download_artifact<'a>(
+    manifest: &'a OpenClawRuntimeReleaseManifest,
+) -> Result<&'a OpenClawRuntimeDownloadArtifact, String> {
+    let platform = openclaw_distribution_os()?;
+    let arch = openclaw_distribution_arch()?;
+    let platform_downloads = match platform {
+        "mac" => manifest.downloads.mac.as_ref(),
+        "win" => manifest.downloads.win.as_ref(),
+        "linux" => manifest.downloads.linux.as_ref(),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        format!(
+            "OpenClaw runtime release manifest does not provide downloads for platform `{platform}`"
+        )
+    })?;
+
+    match arch {
+        "x64" => platform_downloads.x64.as_ref(),
+        "arm64" => platform_downloads.arm64.as_ref(),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        format!(
+            "OpenClaw runtime release manifest does not provide a `{arch}` build for platform `{platform}`"
+        )
+    })
+}
+
+fn resolve_managed_openclaw_download_target_with_client_and_base_url(
     client: &reqwest::blocking::Client,
     version: &str,
-    registry_base_url: &str,
+    base_url: &str,
 ) -> Result<ManagedOpenClawDownloadTarget, String> {
     let trimmed_version = version.trim();
     if trimmed_version.is_empty() {
         return Err("Managed OpenClaw version is required".into());
     }
 
-    let response = client
-        .get(openclaw_registry_release_url(
-            registry_base_url,
-            trimmed_version,
-        ))
-        .send()
-        .map_err(|err| format!("Failed to resolve managed OpenClaw {trimmed_version}: {err}"))?
-        .error_for_status()
-        .map_err(|err| {
-            format!("Managed OpenClaw {trimmed_version} metadata request failed: {err}")
-        })?;
-    let metadata = response
-        .json::<OpenClawRegistryReleaseMetadata>()
-        .map_err(|err| {
-            format!("Failed to parse managed OpenClaw {trimmed_version} metadata: {err}")
-        })?;
-
-    if metadata.name != OPENCLAW_PACKAGE_NAME {
+    let manifest =
+        fetch_openclaw_runtime_release_manifest_with_client_and_base_url(client, base_url)?;
+    if manifest.version.trim() != trimmed_version {
         return Err(format!(
-            "Resolved `{}` instead of `{OPENCLAW_PACKAGE_NAME}` for managed OpenClaw {trimmed_version}",
-            metadata.name
+            "OpenClaw runtime release manifest version mismatch: expected {trimmed_version}, got {}",
+            manifest.version
         ));
     }
-
-    if metadata.version != trimmed_version {
-        return Err(format!(
-            "Managed OpenClaw metadata version mismatch: expected {trimmed_version}, got {}",
-            metadata.version
-        ));
-    }
-
-    let integrity = metadata.dist.integrity.ok_or_else(|| {
-        format!("Managed OpenClaw {trimmed_version} is missing tarball integrity metadata")
-    })?;
-    let file_name = file_name_from_url(&metadata.dist.tarball)?;
+    let artifact = resolve_openclaw_runtime_download_artifact(&manifest)?;
+    let file_name = recommended_openclaw_archive_name(trimmed_version)?;
+    let archive_url = resolve_openclaw_runtime_archive_url_for_base(
+        base_url,
+        artifact.download_url.as_deref(),
+        trimmed_version,
+    )?;
 
     Ok(ManagedOpenClawDownloadTarget {
         version: trimmed_version.to_string(),
-        archive_url: metadata.dist.tarball,
+        archive_url,
         file_name,
-        integrity,
+        sha256: artifact.sha256.clone(),
     })
 }
 
-fn download_managed_openclaw_archive_with_client_in_base_and_registry(
+fn download_managed_openclaw_archive_with_client_in_base_and_base_url(
     base_dir: &Path,
     client: &reqwest::blocking::Client,
     version: &str,
-    registry_base_url: &str,
+    base_url: &str,
     on_progress: Option<&mut dyn FnMut(DownloadProgressPayload)>,
 ) -> Result<PathBuf, String> {
-    let target = resolve_managed_openclaw_download_target_with_client_and_registry(
-        client,
-        version,
-        registry_base_url,
+    let target = resolve_managed_openclaw_download_target_with_client_and_base_url(
+        client, version, base_url,
     )?;
     let downloads_dir = managed_runtime_downloads_dir_from_base(base_dir);
     ensure_dir(&downloads_dir)?;
 
     let destination = downloads_dir.join(&target.file_name);
     if destination.exists() {
-        match verify_file_integrity(&destination, &target.integrity) {
+        match verify_file_sha256(&destination, &target.sha256) {
             Ok(()) => return Ok(destination),
             Err(_) => remove_path_if_exists(&destination)?,
         }
@@ -2617,7 +2523,7 @@ fn download_managed_openclaw_archive_with_client_in_base_and_registry(
         return Err(err);
     }
 
-    if let Err(err) = verify_file_integrity(&temp_path, &target.integrity) {
+    if let Err(err) = verify_file_sha256(&temp_path, &target.sha256) {
         let _ = remove_path_if_exists(&temp_path);
         return Err(err);
     }
@@ -2634,13 +2540,14 @@ fn download_managed_openclaw_archive_with_client_in_base(
     base_dir: &Path,
     client: &reqwest::blocking::Client,
     version: &str,
+    on_progress: Option<&mut dyn FnMut(DownloadProgressPayload)>,
 ) -> Result<PathBuf, String> {
-    download_managed_openclaw_archive_with_client_in_base_and_registry(
+    download_managed_openclaw_archive_with_client_in_base_and_base_url(
         base_dir,
         client,
         version,
-        OPENCLAW_NPM_REGISTRY_BASE_URL,
-        None,
+        OPENCLAW_RUNTIME_RELEASES_BASE_URL,
+        on_progress,
     )
 }
 
@@ -2649,7 +2556,7 @@ fn download_managed_openclaw_archive_in_base(
     version: &str,
 ) -> Result<PathBuf, String> {
     let client = reqwest_client_with_timeout(Duration::from_secs(300))?;
-    download_managed_openclaw_archive_with_client_in_base(base_dir, &client, version)
+    download_managed_openclaw_archive_with_client_in_base(base_dir, &client, version, None)
 }
 
 fn download_managed_node_archive_with_client_in_base(
@@ -2986,6 +2893,14 @@ fn install_managed_openclaw_archive_in_base(
         return Err("Managed OpenClaw version is required".into());
     }
 
+    if let Some(existing_result) = existing_managed_openclaw_install_result_in_base(
+        base_dir,
+        trimmed_version,
+        Some(archive_path),
+    )? {
+        return Ok(existing_result);
+    }
+
     cleanup_managed_runtime_staging_in_base(base_dir, ManagedRuntimeKind::OpenClaw)?;
     let previous_version =
         managed_runtime_current_version_from_base(base_dir, ManagedRuntimeKind::OpenClaw);
@@ -3093,10 +3008,64 @@ fn install_managed_openclaw_archive_in_base(
     })
 }
 
+fn existing_managed_openclaw_install_result_in_base(
+    base_dir: &Path,
+    version: &str,
+    archive_path: Option<&Path>,
+) -> Result<Option<ManagedOpenClawInstallResult>, String> {
+    let trimmed_version = version.trim();
+    if trimmed_version.is_empty() {
+        return Ok(None);
+    }
+
+    let runtime_dir = managed_runtime_version_dir_from_base(
+        base_dir,
+        ManagedRuntimeKind::OpenClaw,
+        trimmed_version,
+    );
+    if !runtime_dir.exists() {
+        return Ok(None);
+    }
+
+    load_or_create_managed_runtime_manifest_in_base(
+        base_dir,
+        ManagedRuntimeKind::OpenClaw,
+        trimmed_version,
+    )?;
+    activate_managed_runtime_version_in_base(
+        base_dir,
+        ManagedRuntimeKind::OpenClaw,
+        trimmed_version,
+    )?;
+
+    Ok(Some(ManagedOpenClawInstallResult {
+        version: trimmed_version.to_string(),
+        archive_path: archive_path
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| runtime_dir.clone()),
+        runtime_dir: runtime_dir.clone(),
+        manifest_path: managed_runtime_manifest_path_from_base(
+            base_dir,
+            ManagedRuntimeKind::OpenClaw,
+            trimmed_version,
+        ),
+        current_path: managed_runtime_current_pointer_path_from_base(
+            base_dir,
+            ManagedRuntimeKind::OpenClaw,
+        ),
+    }))
+}
+
 fn install_managed_openclaw_release_in_base(
     base_dir: &Path,
     payload: &ManagedOpenClawInstallPayload,
 ) -> Result<ManagedOpenClawInstallResult, String> {
+    if let Some(existing_result) =
+        existing_managed_openclaw_install_result_in_base(base_dir, &payload.version, None)?
+    {
+        return Ok(existing_result);
+    }
+
     let archive_path = download_managed_openclaw_archive_in_base(base_dir, &payload.version)?;
     install_managed_openclaw_archive_in_base(base_dir, &payload.version, &archive_path)
 }
@@ -3110,7 +3079,8 @@ fn install_managed_openclaw_release(
 #[allow(dead_code)]
 fn install_recommended_managed_openclaw_release() -> Result<ManagedOpenClawInstallResult, String> {
     let payload = ManagedOpenClawInstallPayload {
-        version: recommended_openclaw_version()?,
+        version: fetch_latest_openclaw_runtime_version()
+            .or_else(|_| recommended_openclaw_version())?,
     };
     install_managed_openclaw_release(&payload)
 }
@@ -3123,6 +3093,23 @@ fn install_managed_openclaw_release_with_progress(
     let version = payload.version.trim().to_string();
     if version.is_empty() {
         return Err("Managed OpenClaw version is required".into());
+    }
+
+    if let Some(existing_result) =
+        existing_managed_openclaw_install_result_in_base(&clawy_base_dir(), &version, None)?
+    {
+        emit_runtime_install_progress(
+            app,
+            kind,
+            "completed",
+            "completed",
+            100.0,
+            Some(&version),
+            Some("OpenClaw runtime already installed; reusing existing version.".into()),
+            None,
+            None,
+        );
+        return Ok(existing_result);
     }
 
     emit_runtime_install_progress(
@@ -3164,11 +3151,10 @@ fn install_managed_openclaw_release_with_progress(
         );
     };
 
-    let archive_path = download_managed_openclaw_archive_with_client_in_base_and_registry(
+    let archive_path = download_managed_openclaw_archive_with_client_in_base(
         &clawy_base_dir(),
         &client,
         &version,
-        OPENCLAW_NPM_REGISTRY_BASE_URL,
         Some(&mut download_progress),
     )?;
 
@@ -3179,7 +3165,7 @@ fn install_managed_openclaw_release_with_progress(
         "running",
         82.0,
         Some(&version),
-        Some("Installing OpenClaw runtime and dependencies.".into()),
+        Some("Installing OpenClaw runtime package.".into()),
         None,
         None,
     );
@@ -3220,7 +3206,8 @@ fn install_recommended_managed_openclaw_release_with_progress(
     app: &AppHandle,
 ) -> Result<ManagedOpenClawInstallResult, String> {
     let payload = ManagedOpenClawInstallPayload {
-        version: recommended_openclaw_version()?,
+        version: fetch_latest_openclaw_runtime_version()
+            .or_else(|_| recommended_openclaw_version())?,
     };
     install_managed_openclaw_release_with_progress(app, &payload)
 }
@@ -3853,7 +3840,7 @@ fn openclaw_update_status(mode: OpenClawUpdateStatusMode) -> Result<Value, Strin
     let managed_version =
         managed_runtime_current_version_from_base(&clawy_base_dir(), ManagedRuntimeKind::OpenClaw);
 
-    let latest_version = fetch_openclaw_registry_latest_version().ok();
+    let latest_version = fetch_latest_openclaw_runtime_version().ok();
     let dry_run = match mode {
         OpenClawUpdateStatusMode::Summary => None,
         OpenClawUpdateStatusMode::Full => {
@@ -3862,11 +3849,11 @@ fn openclaw_update_status(mode: OpenClawUpdateStatusMode) -> Result<Value, Strin
     };
 
     let comparison_version = managed_version.clone().or_else(|| current_version.clone());
-    let update_available = latest_version
-        .as_deref()
-        .zip(comparison_version.as_deref())
-        .map(|(latest, current)| is_remote_version_newer(current, latest))
-        .unwrap_or(false);
+    let update_available = match (latest_version.as_deref(), comparison_version.as_deref()) {
+        (Some(latest), Some(current)) => is_remote_version_newer(current, latest),
+        (Some(_), None) => true,
+        _ => false,
+    };
 
     let effective_channel = dry_run
         .as_ref()
@@ -3882,7 +3869,7 @@ fn openclaw_update_status(mode: OpenClawUpdateStatusMode) -> Result<Value, Strin
         "managedVersion": managed_version,
         "latestVersion": latest_version.clone(),
         "updateAvailable": update_available,
-        "recommendedVersion": recommended_openclaw_version().ok(),
+        "recommendedVersion": latest_version.clone().or_else(|| recommended_openclaw_version().ok()),
         "channel": {
             "value": effective_channel,
             "label": if effective_channel == "stable" {
@@ -3910,10 +3897,29 @@ fn install_openclaw_update(
     let resolved_payload = match payload {
         Some(payload) if !payload.version.trim().is_empty() => payload,
         _ => ManagedOpenClawInstallPayload {
-            version: fetch_openclaw_registry_latest_version()
+            version: fetch_latest_openclaw_runtime_version()
                 .or_else(|_| recommended_openclaw_version())?,
         },
     };
+    let target_version = resolved_payload.version.trim().to_string();
+    let active_managed_version =
+        managed_runtime_current_version_from_base(&clawy_base_dir(), ManagedRuntimeKind::OpenClaw);
+    let already_active_target = active_managed_version
+        .as_deref()
+        .map(|value| value == target_version)
+        .unwrap_or(false)
+        && managed_openclaw_dir_from_base(&clawy_base_dir()).is_some();
+    if already_active_target {
+        let latest_status = openclaw_update_status(OpenClawUpdateStatusMode::Summary).ok();
+        return Ok(json!({
+            "success": true,
+            "skipped": true,
+            "alreadyInstalled": true,
+            "targetVersion": target_version,
+            "gatewayRestart": { "success": true, "skipped": true },
+            "status": latest_status,
+        }));
+    }
 
     let gateway_status = gateway_status_snapshot(state)?;
     let should_restart_gateway = gateway_status.state != "stopped";
@@ -4097,7 +4103,10 @@ fn sync_gateway_settings_to_openclaw(settings: &Settings) -> Result<(), String> 
         _ => Vec::new(),
     };
 
-    if !origins.iter().any(|origin| origin == "http://tauri.localhost") {
+    if !origins
+        .iter()
+        .any(|origin| origin == "http://tauri.localhost")
+    {
         origins.push("http://tauri.localhost".into());
     }
 
@@ -8780,6 +8789,8 @@ fn create_application_menu(app: &AppHandle) -> Result<(), String> {
     let file_menu = SubmenuBuilder::new(app, "File")
         .text("menu-new-chat", "New Chat")
         .separator()
+        .text("menu-run-setup", "Run Setup Again")
+        .separator()
         .text("menu-settings", "Settings")
         .separator()
         .quit()
@@ -8936,6 +8947,10 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         "menu-settings" | "tray-settings" => {
             let _ = show_main_window(app);
             emit_navigate(app, "/settings");
+        }
+        "menu-run-setup" => {
+            let _ = show_main_window(app);
+            emit_navigate(app, "/setup?reset=1");
         }
         "menu-reload" => {
             let _ = with_main_window(app, |window| window.reload().map_err(|err| err.to_string()));
@@ -10404,7 +10419,7 @@ fn invoke_ipc(
                 .as_ref()
                 .map(|value| value.version.clone())
                 .filter(|value| !value.trim().is_empty())
-                .or_else(|| fetch_openclaw_registry_latest_version().ok())
+                .or_else(|| fetch_latest_openclaw_runtime_version().ok())
                 .or_else(|| recommended_openclaw_version().ok());
             if !begin_runtime_install(&state, ManagedRuntimeKind::OpenClaw)? {
                 return Ok(json!({
@@ -10531,7 +10546,9 @@ fn invoke_ipc(
             }))
         }
         "runtime:installRecommendedOpenClaw" => {
-            let version = recommended_openclaw_version().ok();
+            let version = fetch_latest_openclaw_runtime_version()
+                .or_else(|_| recommended_openclaw_version())
+                .ok();
             if !begin_runtime_install(&state, ManagedRuntimeKind::OpenClaw)? {
                 return Ok(json!({
                     "success": true,
@@ -11432,8 +11449,7 @@ mod tests {
     #[test]
     fn custom_provider_api_type_defaults_to_chat_completions() {
         let legacy = provider_config_for_test("custom", None);
-        let explicit_default =
-            provider_config_for_test("custom", Some("chat-completions"));
+        let explicit_default = provider_config_for_test("custom", Some("chat-completions"));
 
         assert_eq!(provider_api(&legacy), Some("openai-completions"));
         assert_eq!(provider_api(&explicit_default), Some("openai-completions"));
@@ -11763,13 +11779,57 @@ mod tests {
         .expect("write fake openclaw dist entry");
 
         let file = File::create(&archive_path).expect("create fake openclaw archive");
-        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-        let mut builder = tar::Builder::new(encoder);
-        builder
-            .append_dir_all("package", &package_dir)
-            .expect("append fake openclaw package");
-        let encoder = builder.into_inner().expect("finish tar archive");
-        encoder.finish().expect("finish gzip encoder");
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o755);
+        let root_dir = format!("openclaw-runtime-{version}/");
+
+        archive
+            .add_directory(root_dir.clone(), options)
+            .expect("add fake openclaw root directory");
+        archive
+            .add_directory(format!("{root_dir}dist/"), options)
+            .expect("add fake openclaw dist directory");
+        if include_node_modules {
+            archive
+                .add_directory(format!("{root_dir}node_modules/"), options)
+                .expect("add fake openclaw node_modules directory");
+            archive
+                .start_file(format!("{root_dir}node_modules/.keep"), options)
+                .expect("start fake openclaw node_modules keep file");
+            archive
+                .write_all(b"")
+                .expect("write fake openclaw node_modules keep file");
+        }
+        archive
+            .start_file(format!("{root_dir}package.json"), options)
+            .expect("start fake openclaw package json");
+        archive
+            .write_all(
+                serde_json::to_string_pretty(&json!({
+                    "name": package_name,
+                    "version": version,
+                }))
+                .expect("serialize fake openclaw package")
+                .as_bytes(),
+            )
+            .expect("write fake openclaw package json");
+        if include_entry {
+            archive
+                .start_file(format!("{root_dir}openclaw.mjs"), options)
+                .expect("start fake openclaw entry");
+            archive
+                .write_all(b"#!/usr/bin/env node\nimport './dist/entry.mjs';\n")
+                .expect("write fake openclaw entry");
+        }
+        archive
+            .start_file(format!("{root_dir}dist/entry.mjs"), options)
+            .expect("start fake openclaw dist entry");
+        archive
+            .write_all(b"export const ok = true;\n")
+            .expect("write fake openclaw dist entry");
+        archive.finish().expect("finish fake openclaw archive");
 
         fs::remove_dir_all(&package_dir).expect("remove fake openclaw package dir");
         archive_path
@@ -12604,31 +12664,42 @@ mod tests {
     fn managed_openclaw_download_pipeline_resolves_version_and_verifies_archive() {
         let test_dir = TestDir::new("managed-openclaw-download");
         let version = "2026.3.2";
-        let archive_name = "openclaw-2026.3.2.tgz";
-        let source_archive = create_fake_openclaw_archive(test_dir.path(), version, archive_name);
+        let archive_name =
+            recommended_openclaw_archive_name(version).expect("resolve openclaw archive name");
+        let source_archive = create_fake_openclaw_archive(test_dir.path(), version, &archive_name);
         let archive_bytes = fs::read(&source_archive).expect("read source openclaw archive");
-        let integrity = format!("sha512-{}", STANDARD.encode(Sha512::digest(&archive_bytes)));
-        let metadata_path = format!("/{OPENCLAW_PACKAGE_NAME}/{version}");
-        let archive_path = format!("/{OPENCLAW_PACKAGE_NAME}/-/{archive_name}");
+        let archive_sha256 = sha256_digest_file(&source_archive).expect("sha256 digest");
+        let manifest_path = "/release-info.json".to_string();
+        let archive_path = format!("/{archive_name}");
+        let distribution_os = openclaw_distribution_os().expect("supported openclaw os");
+        let distribution_arch = openclaw_distribution_arch().expect("supported openclaw arch");
         let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("bind openclaw registry server");
-        let port = listener.local_addr().expect("registry addr").port();
-        let registry_url = format!("http://127.0.0.1:{port}");
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind openclaw release server");
+        let port = listener.local_addr().expect("release server addr").port();
+        let release_base_url = format!("http://127.0.0.1:{port}");
+        let manifest_body = {
+            let mut arch_downloads = serde_json::Map::new();
+            arch_downloads.insert(
+                distribution_arch.to_string(),
+                json!({
+                    "url": format!("{release_base_url}{archive_path}"),
+                    "sha256": archive_sha256.clone(),
+                }),
+            );
+            let mut platform_downloads = serde_json::Map::new();
+            platform_downloads.insert(distribution_os.to_string(), Value::Object(arch_downloads));
+            json!({
+                "version": version,
+                "downloads": Value::Object(platform_downloads),
+            })
+        };
         let routes = std::sync::Arc::new(std::sync::Mutex::new(
             vec![
                 (
-                    metadata_path,
+                    manifest_path,
                     (
                         "application/json".to_string(),
-                        serde_json::to_vec(&json!({
-                            "name": OPENCLAW_PACKAGE_NAME,
-                            "version": version,
-                            "dist": {
-                                "tarball": format!("{registry_url}{archive_path}"),
-                                "integrity": integrity.clone(),
-                            },
-                        }))
-                        .expect("serialize registry metadata"),
+                        serde_json::to_vec(&manifest_body).expect("serialize release metadata"),
                     ),
                 ),
                 (
@@ -12642,9 +12713,9 @@ mod tests {
         let server_routes = routes.clone();
         std::thread::spawn(move || {
             for _ in 0..2 {
-                let (mut stream, _) = listener.accept().expect("accept registry request");
+                let (mut stream, _) = listener.accept().expect("accept release request");
                 let mut request = [0_u8; 4096];
-                let read = stream.read(&mut request).expect("read registry request");
+                let read = stream.read(&mut request).expect("read release request");
                 let request_line = String::from_utf8_lossy(&request[..read]);
                 let path = request_line
                     .lines()
@@ -12654,7 +12725,7 @@ mod tests {
                     .to_string();
                 let (content_type, body) = server_routes
                     .lock()
-                    .expect("lock registry routes")
+                    .expect("lock release routes")
                     .remove(&path)
                     .expect("expected route");
                 let headers = format!(
@@ -12674,11 +12745,11 @@ mod tests {
             .build()
             .expect("build client");
 
-        let downloaded = download_managed_openclaw_archive_with_client_in_base_and_registry(
+        let downloaded = download_managed_openclaw_archive_with_client_in_base_and_base_url(
             test_dir.path(),
             &client,
             version,
-            &registry_url,
+            &release_base_url,
             None,
         )
         .expect("download managed openclaw archive");
@@ -12688,15 +12759,19 @@ mod tests {
             managed_runtime_downloads_dir_from_base(test_dir.path()).join(archive_name)
         );
         assert!(downloaded.exists());
-        assert!(verify_file_integrity(&downloaded, &integrity).is_ok());
+        assert_eq!(
+            sha256_digest_file(&downloaded).expect("downloaded archive sha256"),
+            archive_sha256
+        );
     }
 
     #[test]
     fn managed_openclaw_install_pipeline_stages_promotes_and_activates_version() {
         let test_dir = TestDir::new("managed-openclaw-install");
         let version = "2026.3.2";
-        let archive =
-            create_fake_openclaw_archive(test_dir.path(), version, "openclaw-2026.3.2.tgz");
+        let archive_name =
+            recommended_openclaw_archive_name(version).expect("resolve openclaw archive name");
+        let archive = create_fake_openclaw_archive(test_dir.path(), version, &archive_name);
 
         let result = install_managed_openclaw_archive_in_base(test_dir.path(), version, &archive)
             .expect("install managed openclaw archive");
@@ -12748,16 +12823,49 @@ mod tests {
     }
 
     #[test]
+    fn managed_openclaw_install_pipeline_reuses_existing_version() {
+        let test_dir = TestDir::new("managed-openclaw-install-reuse");
+        let version = "2026.3.2";
+        let working_archive_name = "openclaw-working-reuse.zip";
+        let broken_archive_name = "openclaw-broken-reuse.zip";
+        let working_archive =
+            create_fake_openclaw_archive(test_dir.path(), version, working_archive_name);
+        let broken_archive = create_fake_openclaw_archive_with_options(
+            test_dir.path(),
+            version,
+            broken_archive_name,
+            false,
+            true,
+            OPENCLAW_PACKAGE_NAME,
+        );
+
+        let first_result =
+            install_managed_openclaw_archive_in_base(test_dir.path(), version, &working_archive)
+                .expect("install first managed openclaw archive");
+        let second_result =
+            install_managed_openclaw_archive_in_base(test_dir.path(), version, &broken_archive)
+                .expect("reuse existing managed openclaw archive");
+
+        assert_eq!(second_result.runtime_dir, first_result.runtime_dir);
+        assert_eq!(second_result.version, version);
+        assert!(second_result.runtime_dir.join("openclaw.mjs").exists());
+    }
+
+    #[test]
     fn managed_openclaw_install_failure_does_not_replace_working_runtime() {
         let test_dir = TestDir::new("managed-openclaw-install-failure");
         let working_version = "2026.3.2";
         let broken_version = "2026.3.3";
+        let working_archive_name = recommended_openclaw_archive_name(working_version)
+            .expect("resolve working openclaw archive name");
+        let broken_archive_name = recommended_openclaw_archive_name(broken_version)
+            .expect("resolve broken openclaw archive name");
         let working_archive =
-            create_fake_openclaw_archive(test_dir.path(), working_version, "openclaw-2026.3.2.tgz");
+            create_fake_openclaw_archive(test_dir.path(), working_version, &working_archive_name);
         let broken_archive = create_fake_openclaw_archive_with_options(
             test_dir.path(),
             broken_version,
-            "openclaw-2026.3.3.tgz",
+            &broken_archive_name,
             false,
             true,
             OPENCLAW_PACKAGE_NAME,
@@ -12815,10 +12923,14 @@ mod tests {
         let test_dir = TestDir::new("managed-openclaw-switch");
         let first_version = "2026.3.2";
         let second_version = "2026.3.3";
+        let first_archive_name =
+            recommended_openclaw_archive_name(first_version).expect("resolve first archive name");
+        let second_archive_name =
+            recommended_openclaw_archive_name(second_version).expect("resolve second archive name");
         let first_archive =
-            create_fake_openclaw_archive(test_dir.path(), first_version, "openclaw-2026.3.2.tgz");
+            create_fake_openclaw_archive(test_dir.path(), first_version, &first_archive_name);
         let second_archive =
-            create_fake_openclaw_archive(test_dir.path(), second_version, "openclaw-2026.3.3.tgz");
+            create_fake_openclaw_archive(test_dir.path(), second_version, &second_archive_name);
 
         install_managed_openclaw_archive_in_base(test_dir.path(), first_version, &first_archive)
             .expect("install first managed openclaw");

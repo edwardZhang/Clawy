@@ -92,6 +92,7 @@ function App() {
   const theme = useSettingsStore((state) => state.theme);
   const language = useSettingsStore((state) => state.language);
   const setupComplete = useSettingsStore((state) => state.setupComplete);
+  const markSetupIncomplete = useSettingsStore((state) => state.markSetupIncomplete);
   const initGateway = useGatewayStore((state) => state.init);
 
   useEffect(() => {
@@ -122,6 +123,11 @@ function App() {
     const handleNavigate = (...args: unknown[]) => {
       const path = args[0];
       if (typeof path === 'string') {
+        if (path.startsWith('/setup') && path.includes('reset=1')) {
+          markSetupIncomplete();
+          navigate('/setup');
+          return;
+        }
         navigate(path);
       }
     };
@@ -133,7 +139,7 @@ function App() {
         unsubscribe();
       }
     };
-  }, [navigate]);
+  }, [markSetupIncomplete, navigate]);
 
   // Apply theme
   useEffect(() => {

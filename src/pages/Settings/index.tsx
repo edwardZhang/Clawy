@@ -1018,7 +1018,7 @@ export function Settings() {
                   openclawRuntimeInstalling ||
                   openclawRuntimeLoading ||
                   !openclawRuntimeStatus?.latestVersion ||
-                  !openclawRuntimeStatus?.updateAvailable
+                  Boolean(openclawRuntimeStatus?.currentVersion) && !openclawRuntimeStatus?.updateAvailable
                 }
               >
                 <Download className={`h-4 w-4 mr-2${openclawRuntimeInstalling ? ' animate-bounce' : ''}`} />
