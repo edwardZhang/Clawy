@@ -635,7 +635,12 @@ function RuntimeCheckCard({
             <CardTitle className="text-base">{title}</CardTitle>
             <CardDescription>{description}</CardDescription>
           </div>
-          <Badge variant={runtimeCheckBadgeVariant(state.status)}>{statusLabel}</Badge>
+          <Badge
+            variant={runtimeCheckBadgeVariant(state.status)}
+            className="shrink-0 whitespace-nowrap"
+          >
+            {statusLabel}
+          </Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
