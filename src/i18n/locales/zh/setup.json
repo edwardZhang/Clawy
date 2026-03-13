@@ -45,6 +45,7 @@
         "gateway": "网关服务",
         "installNode": "安装托管 Node.js",
         "installOpenClaw": "安装 OpenClaw",
+        "resolveOpenClaw": "使用 OSS 解决",
         "startGateway": "启动网关",
         "restartGateway": "重启网关",
         "cards": {
