@@ -47,6 +47,7 @@ type RuntimeInstallEventPayload = {
   status?: 'running' | 'completed' | 'failed';
   percent?: number;
   version?: string;
+  strategy?: 'official' | 'oss';
   detail?: string;
   error?: string;
   progress?: {
@@ -62,6 +63,7 @@ type RuntimeInstallResponse = {
   started?: boolean;
   alreadyRunning?: boolean;
   targetVersion?: string;
+  strategy?: 'official' | 'oss';
 };
 
 type OpenClawUpdateStatusRefreshEventPayload = {
@@ -78,6 +80,13 @@ type OpenClawUpdateStatus = {
   currentDir?: string | null;
   managedVersion?: string | null;
   latestVersion?: string | null;
+  officialLatestVersion?: string | null;
+  ossLatestVersion?: string | null;
+  officialError?: string | null;
+  preferredStrategy?: 'official' | 'oss' | null;
+  resolvedLatestStrategy?: 'official' | 'oss' | null;
+  fallbackAvailable?: boolean;
+  usedFallbackForLatestVersion?: boolean;
   recommendedVersion?: string | null;
   updateAvailable?: boolean;
   channel?: {
@@ -185,6 +194,7 @@ export function Settings() {
   const [openclawRuntimeError, setOpenclawRuntimeError] = useState<string | null>(null);
   const [openclawInstallProgress, setOpenclawInstallProgress] = useState<RuntimeInstallEventPayload | null>(null);
   const [openclawRuntimeRefreshInteractive, setOpenclawRuntimeRefreshInteractive] = useState(false);
+  const [openclawLastFailedInstallStrategy, setOpenclawLastFailedInstallStrategy] = useState<'official' | 'oss' | null>(null);
 
   const isWindows = desktopApi.platform === 'win32';
   const showCliTools = true;
@@ -284,12 +294,13 @@ export function Settings() {
     }
   }, [t]);
 
-  const handleInstallOpenClawUpdate = async () => {
+  const handleInstallOpenClawUpdate = async (strategy: 'official' | 'oss' = 'official') => {
     setOpenclawRuntimeInstalling(true);
     setOpenclawRuntimeError(null);
+    setOpenclawLastFailedInstallStrategy(null);
     try {
       const payload = openclawRuntimeStatus?.latestVersion
-        ? { version: openclawRuntimeStatus.latestVersion }
+        ? { version: openclawRuntimeStatus.latestVersion, strategy }
         : undefined;
       const result = await desktopApi.ipcRenderer.invoke('openclaw:installUpdate', payload) as RuntimeInstallResponse;
       if (result.success === false) {
@@ -301,6 +312,7 @@ export function Settings() {
     } catch (error) {
       const message = String(error);
       setOpenclawRuntimeError(message);
+      setOpenclawLastFailedInstallStrategy(strategy);
       setOpenclawRuntimeInstalling(false);
       setOpenclawInstallProgress(null);
       toast.error(t('openclawRuntime.toast.installFailed', { error: message }));
@@ -480,6 +492,7 @@ export function Settings() {
 
       if (event.status === 'failed') {
         setOpenclawRuntimeError(event.error || event.detail || null);
+        setOpenclawLastFailedInstallStrategy(event.strategy || 'official');
         setOpenclawRuntimeInstalling(false);
         setOpenclawInstallProgress(null);
       }
@@ -487,6 +500,7 @@ export function Settings() {
       if (event.status === 'completed') {
         const version = event.version || openclawRuntimeStatus?.latestVersion || '';
         toast.success(t('openclawRuntime.toast.updated', { version }));
+        setOpenclawLastFailedInstallStrategy(null);
         setOpenclawRuntimeInstalling(false);
         void loadOpenClawRuntimeStatus(false, 'summary').finally(() => {
           setOpenclawInstallProgress(null);
@@ -533,6 +547,15 @@ export function Settings() {
 
     return () => { unsubscribe?.(); };
   }, [openclawRuntimeRefreshInteractive, t]);
+
+  const canResolveOpenClawWithOss = Boolean(
+    openclawRuntimeStatus?.fallbackAvailable
+      && openclawRuntimeStatus?.latestVersion
+      && (
+        openclawLastFailedInstallStrategy === 'official'
+        || (!!openclawRuntimeError && !!openclawRuntimeStatus?.officialError)
+      ),
+  );
 
   useEffect(() => {
     setProxyEnabledDraft(proxyEnabled);
@@ -977,6 +1000,14 @@ export function Settings() {
             </div>
           ) : null}
 
+          {openclawRuntimeStatus?.officialError && openclawRuntimeStatus?.usedFallbackForLatestVersion ? (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
+              <p className="font-medium">{t('openclawRuntime.fallback.title')}</p>
+              <p className="mt-1 text-xs leading-5">{t('openclawRuntime.fallback.description')}</p>
+              <p className="mt-2 text-xs break-words opacity-80">{openclawRuntimeStatus.officialError}</p>
+            </div>
+          ) : null}
+
           {openclawInstallProgress ? (
             <div className="space-y-2 rounded-lg border border-border/60 bg-background/40 p-3">
               <div className="flex items-center justify-between text-sm">
@@ -1013,7 +1044,7 @@ export function Settings() {
                 {openclawRuntimeLoading ? t('openclawRuntime.actions.checking') : t('openclawRuntime.actions.check')}
               </Button>
               <Button
-                onClick={handleInstallOpenClawUpdate}
+                onClick={() => void handleInstallOpenClawUpdate()}
                 disabled={
                   openclawRuntimeInstalling ||
                   openclawRuntimeLoading ||
@@ -1024,6 +1055,16 @@ export function Settings() {
                 <Download className={`h-4 w-4 mr-2${openclawRuntimeInstalling ? ' animate-bounce' : ''}`} />
                 {openclawRuntimeInstalling ? t('openclawRuntime.actions.installing') : t('openclawRuntime.actions.install')}
               </Button>
+              {canResolveOpenClawWithOss ? (
+                <Button
+                  variant="outline"
+                  onClick={() => void handleInstallOpenClawUpdate('oss')}
+                  disabled={openclawRuntimeInstalling || openclawRuntimeLoading}
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  {t('openclawRuntime.actions.resolve')}
+                </Button>
+              ) : null}
             </div>
           </div>
         </CardContent>

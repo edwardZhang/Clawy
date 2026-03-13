@@ -394,6 +394,7 @@ interface RuntimeInstallResponse {
   alreadyRunning?: boolean;
   runtime?: 'nodejs' | 'openclaw';
   version?: string;
+  strategy?: 'official' | 'oss';
   result?: {
     version?: string;
   };
@@ -405,6 +406,7 @@ interface RuntimeInstallEventPayload {
   status?: 'running' | 'completed' | 'failed';
   percent?: number;
   version?: string;
+  strategy?: 'official' | 'oss';
   detail?: string;
   error?: string;
   progress?: {
@@ -707,6 +709,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     undefined,
     createRuntimeCheckMachineState
   );
+  const [openclawLastFailedInstallStrategy, setOpenclawLastFailedInstallStrategy] = useState<'official' | 'oss' | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [logContent, setLogContent] = useState('');
   const gatewayTimeoutRef = useRef<number | null>(null);
@@ -924,6 +927,9 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         : undefined;
 
       if (event.status === 'failed') {
+        if (key === 'openclaw') {
+          setOpenclawLastFailedInstallStrategy(event.strategy || 'official');
+        }
         dispatchChecks({
           type: 'set',
           key,
@@ -938,6 +944,9 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
       }
 
       if (event.status === 'completed') {
+        if (key === 'openclaw') {
+          setOpenclawLastFailedInstallStrategy(null);
+        }
         dispatchChecks({
           type: 'set',
           key,
@@ -1071,7 +1080,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     }
   };
 
-  const handleInstallOpenClaw = async () => {
+  const handleInstallOpenClaw = async (strategy: 'official' | 'oss' = 'official') => {
     dispatchChecks({
       type: 'set',
       key: 'openclaw',
@@ -1083,7 +1092,8 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     });
 
     try {
-      const response = await desktopApi.ipcRenderer.invoke('runtime:installRecommendedOpenClaw') as RuntimeInstallResponse;
+      setOpenclawLastFailedInstallStrategy(null);
+      const response = await desktopApi.ipcRenderer.invoke('runtime:installRecommendedOpenClaw', { strategy }) as RuntimeInstallResponse;
       if (response.success === false) {
         throw new Error(response.error || t('runtime.status.openclawInstallFailed'));
       }
@@ -1091,6 +1101,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         toast.info(t('runtime.status.installingOpenClaw'));
       }
     } catch (error) {
+      setOpenclawLastFailedInstallStrategy(strategy);
       dispatchChecks({
         type: 'set',
         key: 'openclaw',
@@ -1173,10 +1184,12 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     ? handleInstallNode
     : undefined;
   const openclawActionLabel = checks.checks.openclaw.status === 'error'
-    ? t('runtime.installOpenClaw')
+    ? openclawLastFailedInstallStrategy === 'official'
+      ? t('runtime.resolveOpenClaw')
+      : t('runtime.installOpenClaw')
     : undefined;
   const openclawAction = checks.checks.openclaw.status === 'error'
-    ? handleInstallOpenClaw
+    ? () => void handleInstallOpenClaw(openclawLastFailedInstallStrategy === 'official' ? 'oss' : 'official')
     : undefined;
   const gatewayActionLabel = runtimeReady && (checks.checks.gateway.status === 'error' || checks.checks.gateway.status === 'idle')
     ? gatewayStatus.state === 'error'

@@ -45,6 +45,7 @@
         "gateway": "Gateway Service",
         "installNode": "Install Managed Node.js",
         "installOpenClaw": "Install OpenClaw",
+        "resolveOpenClaw": "Resolve with OSS",
         "startGateway": "Start Gateway",
         "restartGateway": "Restart Gateway",
         "cards": {

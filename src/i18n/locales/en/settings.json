@@ -192,7 +192,12 @@
       "check": "Check OpenClaw Updates",
       "checking": "Checking...",
       "install": "Install Latest OpenClaw",
-      "installing": "Installing..."
+      "installing": "Installing...",
+      "resolve": "Resolve with OSS"
+    },
+    "fallback": {
+      "title": "Official update check failed",
+      "description": "Clawy is showing the OSS fallback result for version detection. Installing still uses the official path first; if that fails, use the OSS resolve action."
     },
     "phases": {
       "preparing": "Preparing download...",
