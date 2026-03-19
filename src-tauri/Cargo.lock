@@ -543,6 +543,7 @@ dependencies = [
  "tauri-plugin-shell",
  "time",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
  "xz2",
  "zip",
