@@ -6,7 +6,8 @@ use tauri::AppHandle;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use super::server::{self, BridgeEventEnvelope, BridgeRuntimeConfig, BridgeRuntimeHandle};
+use super::events::BridgeEventEnvelope;
+use super::server::{self, BridgeRuntimeConfig, BridgeRuntimeHandle};
 
 const BRIDGE_CONFIG_FILE_NAME: &str = "bridge-server.json";
 const DEFAULT_BRIDGE_PORT_OFFSET: u16 = 1;
@@ -20,6 +21,8 @@ struct PersistedBridgeConfig {
     auth_token: String,
     #[serde(default)]
     allowed_origins: Vec<String>,
+    #[serde(default)]
+    node_id: String,
 }
 
 pub(crate) fn start_bridge_server(
@@ -31,13 +34,14 @@ pub(crate) fn start_bridge_server(
     }
 
     let runtime_handle = server::spawn_server(
-        Some(app_handle),
-        bridge_state,
+        Some(app_handle.clone()),
+        bridge_state.clone(),
         BridgeRuntimeConfig {
             listen_addr: resolve_listen_addr(&crate::load_settings())?,
             auth_token: resolve_auth_token()?,
             allowed_origins: resolve_allowed_origins()?,
             clawy_base_dir: crate::clawy_base_dir(),
+            node_id: bridge_node_id()?,
             openclaw_config_dir: crate::openclaw_config_dir(),
         },
     )?;
@@ -51,6 +55,7 @@ pub(crate) fn start_bridge_server(
     );
 
     let _ = BRIDGE_RUNTIME.set(runtime_handle);
+    super::gateway_adapter::start_gateway_event_adapter(app_handle, bridge_state);
     Ok(())
 }
 
@@ -64,6 +69,10 @@ pub(crate) fn bridge_events_sender() -> Option<broadcast::Sender<BridgeEventEnve
     BRIDGE_RUNTIME
         .get()
         .map(|runtime| runtime.events_tx.clone())
+}
+
+pub(crate) fn bridge_node_id() -> Result<String, String> {
+    Ok(load_or_create_persisted_bridge_config()?.node_id)
 }
 
 fn resolve_listen_addr(settings: &crate::Settings) -> Result<SocketAddr, String> {
@@ -107,6 +116,11 @@ fn load_or_create_persisted_bridge_config() -> Result<PersistedBridgeConfig, Str
 
     if config.auth_token.trim().is_empty() {
         config.auth_token = format!("bridge_{}", Uuid::new_v4().simple());
+        changed = true;
+    }
+
+    if config.node_id.trim().is_empty() {
+        config.node_id = format!("node_{}", Uuid::new_v4());
         changed = true;
     }
 

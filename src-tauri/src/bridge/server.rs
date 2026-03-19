@@ -1,13 +1,8 @@
-use axum::extract::ws::rejection::WebSocketUpgradeRejection;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use futures_util::StreamExt;
-use serde::Serialize;
-use serde_json::Value;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -15,7 +10,9 @@ use tokio::sync::broadcast;
 
 use super::auth::{self, RequestContext};
 use super::chat_control;
+use super::events::BridgeEventEnvelope;
 use super::response::ApiError;
+use super::ws::events_ws_handler;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -24,6 +21,7 @@ pub(crate) struct BridgeRuntimeConfig {
     pub(crate) auth_token: String,
     pub(crate) allowed_origins: Vec<String>,
     pub(crate) clawy_base_dir: PathBuf,
+    pub(crate) node_id: String,
     pub(crate) openclaw_config_dir: PathBuf,
 }
 
@@ -42,18 +40,6 @@ pub(crate) struct BridgeRuntimeHandle {
     pub(crate) local_addr: SocketAddr,
     pub(crate) config: BridgeRuntimeConfig,
     pub(crate) events_tx: broadcast::Sender<BridgeEventEnvelope>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct BridgeEventEnvelope {
-    pub(crate) event_id: String,
-    pub(crate) node_id: String,
-    pub(crate) session_id: Option<String>,
-    pub(crate) run_id: Option<String>,
-    #[serde(rename = "type")]
-    pub(crate) event_type: String,
-    pub(crate) ts: String,
-    pub(crate) payload: Value,
 }
 
 pub(crate) fn spawn_server(
@@ -206,95 +192,8 @@ async fn runtime_capabilities_handler(Extension(context): Extension<RequestConte
     route_not_implemented(&context, "GET /api/runtime/capabilities")
 }
 
-async fn events_ws_handler(
-    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
-    State(state): State<BridgeAppState>,
-    Extension(context): Extension<RequestContext>,
-) -> Response {
-    match ws {
-        Ok(upgrade) => upgrade
-            .on_upgrade(move |socket| handle_events_socket(socket, context, state))
-            .into_response(),
-        Err(_) => {
-            ApiError::invalid_request(&context, "This route requires a WebSocket upgrade request.")
-                .into_response()
-        }
-    }
-}
-
 fn route_not_implemented(context: &RequestContext, route_name: &'static str) -> Response {
     ApiError::not_implemented(context, route_name).into_response()
-}
-
-async fn handle_events_socket(
-    mut socket: WebSocket,
-    context: RequestContext,
-    state: BridgeAppState,
-) {
-    crate::append_log_line(
-        "INFO",
-        &format!(
-            "Clawy Bridge WS connected: request_id={} caller_id={}",
-            context.request_id,
-            context.caller_id.as_deref().unwrap_or("unknown")
-        ),
-    );
-
-    let mut events_rx = state.events_tx.subscribe();
-
-    loop {
-        tokio::select! {
-            inbound = socket.next() => match inbound {
-                Some(Ok(Message::Close(_))) | None => break,
-                Some(Ok(Message::Ping(payload))) => {
-                    if socket.send(Message::Pong(payload)).await.is_err() {
-                        break;
-                    }
-                }
-                Some(Ok(Message::Text(_))) | Some(Ok(Message::Binary(_))) | Some(Ok(Message::Pong(_))) => {}
-                Some(Err(error)) => {
-                    crate::append_log_line(
-                        "WARN",
-                        &format!("Clawy Bridge WS receive error for {}: {error}", context.request_id),
-                    );
-                    break;
-                }
-            },
-            outbound = events_rx.recv() => match outbound {
-                Ok(event) => {
-                    let payload = match serde_json::to_string(&event) {
-                        Ok(payload) => payload,
-                        Err(error) => {
-                            crate::append_log_line(
-                                "WARN",
-                                &format!("Failed to serialize Clawy Bridge event: {error}"),
-                            );
-                            continue;
-                        }
-                    };
-
-                    if socket.send(Message::Text(payload.into())).await.is_err() {
-                        break;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    crate::append_log_line(
-                        "WARN",
-                        &format!("Clawy Bridge WS lagged and skipped {skipped} event(s)"),
-                    );
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    }
-
-    crate::append_log_line(
-        "INFO",
-        &format!(
-            "Clawy Bridge WS disconnected: request_id={}",
-            context.request_id
-        ),
-    );
 }
 
 #[cfg(test)]
@@ -302,6 +201,7 @@ mod tests {
     use super::*;
     use reqwest::Client;
     use reqwest::StatusCode;
+    use serde_json::Value;
     use std::time::Duration;
 
     fn test_config() -> BridgeRuntimeConfig {
@@ -310,6 +210,7 @@ mod tests {
             auth_token: "bridge-test-token".into(),
             allowed_origins: Vec::new(),
             clawy_base_dir: PathBuf::from("."),
+            node_id: "node_test".into(),
             openclaw_config_dir: PathBuf::from("."),
         }
     }

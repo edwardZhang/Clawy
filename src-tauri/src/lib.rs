@@ -9831,12 +9831,14 @@ fn set_gateway_status(
     };
 
     let _ = app.emit("gateway:status-changed", &snapshot);
+    bridge::gateway_adapter::publish_gateway_status_snapshot(state, &snapshot);
     update_tray_tooltip(app, &snapshot.state);
     Ok(snapshot)
 }
 
 fn emit_gateway_error(app: &AppHandle, message: &str) {
     let _ = app.emit("gateway:error", message.to_string());
+    bridge::gateway_adapter::publish_runtime_error(message, false);
 }
 
 fn spawn_log_thread<R>(reader: R, level: &'static str)
