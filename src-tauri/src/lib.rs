@@ -8485,8 +8485,8 @@ fn resolve_node_binary_with_candidates_and_managed_and_preference(
         ]
     } else {
         vec![
-            (NodeBinarySource::Path, system_path),
             (NodeBinarySource::Managed, managed_path),
+            (NodeBinarySource::Path, system_path),
             (NodeBinarySource::Bundled, Some(bundled_path)),
         ]
     };
@@ -13181,7 +13181,7 @@ mod tests {
 
         assert_eq!(resolution.source, Some(NodeBinarySource::Managed));
         assert_eq!(resolution.version.as_deref(), Some("24.8.0"));
-        assert_eq!(resolution.diagnostics.len(), 2);
+        assert_eq!(resolution.diagnostics.len(), 1);
         assert_eq!(
             fs::read_to_string(managed_runtime_current_pointer_path_from_base(
                 test_dir.path(),

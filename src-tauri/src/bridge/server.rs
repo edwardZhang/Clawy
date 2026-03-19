@@ -1,4 +1,5 @@
-use axum::extract::{Extension, Path};
+use axum::extract::Extension;
+use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -9,9 +10,13 @@ use tauri::AppHandle;
 use tokio::sync::broadcast;
 
 use super::auth::{self, RequestContext};
+use super::capabilities;
 use super::chat_control;
 use super::events::BridgeEventEnvelope;
+use super::node;
 use super::response::ApiError;
+use super::runtime;
+use super::sessions;
 use super::ws::events_ws_handler;
 
 #[allow(dead_code)]
@@ -118,17 +123,20 @@ pub(crate) fn build_router(state: BridgeAppState) -> Router {
 
 fn node_routes() -> Router<BridgeAppState> {
     Router::new()
-        .route("/node/info", get(node_info_handler))
-        .route("/node/health", get(node_health_handler))
+        .route("/node/info", get(node::node_info_handler))
+        .route("/node/health", get(node::node_health_handler))
 }
 
 fn session_routes() -> Router<BridgeAppState> {
     Router::new()
-        .route("/sessions", get(session_list_handler))
-        .route("/sessions/{session_id}", get(session_detail_handler))
+        .route("/sessions", get(sessions::session_list_handler))
+        .route(
+            "/sessions/{session_id}",
+            get(sessions::session_detail_handler),
+        )
         .route(
             "/sessions/{session_id}/history",
-            get(session_history_handler),
+            get(sessions::session_history_handler),
         )
         .route(
             "/sessions/{session_id}/send",
@@ -158,42 +166,24 @@ async fn api_method_not_allowed(Extension(context): Extension<RequestContext>) -
     ApiError::method_not_allowed(&context).into_response()
 }
 
-async fn node_info_handler(Extension(context): Extension<RequestContext>) -> Response {
-    route_not_implemented(&context, "GET /api/node/info")
-}
-
-async fn node_health_handler(Extension(context): Extension<RequestContext>) -> Response {
-    route_not_implemented(&context, "GET /api/node/health")
-}
-
-async fn session_list_handler(Extension(context): Extension<RequestContext>) -> Response {
-    route_not_implemented(&context, "GET /api/sessions")
-}
-
-async fn session_detail_handler(
-    Path(_session_id): Path<String>,
+async fn runtime_status_handler(
+    axum::extract::State(state): axum::extract::State<BridgeAppState>,
     Extension(context): Extension<RequestContext>,
 ) -> Response {
-    route_not_implemented(&context, "GET /api/sessions/:session_id")
+    match runtime::build_runtime_status(&state) {
+        Ok(snapshot) => super::response::success(StatusCode::OK, &context.request_id, snapshot),
+        Err(error) => error.into_response_with_request_id(&context.request_id),
+    }
 }
 
-async fn session_history_handler(
-    Path(_session_id): Path<String>,
+async fn runtime_capabilities_handler(
+    axum::extract::State(state): axum::extract::State<BridgeAppState>,
     Extension(context): Extension<RequestContext>,
 ) -> Response {
-    route_not_implemented(&context, "GET /api/sessions/:session_id/history")
-}
-
-async fn runtime_status_handler(Extension(context): Extension<RequestContext>) -> Response {
-    route_not_implemented(&context, "GET /api/runtime/status")
-}
-
-async fn runtime_capabilities_handler(Extension(context): Extension<RequestContext>) -> Response {
-    route_not_implemented(&context, "GET /api/runtime/capabilities")
-}
-
-fn route_not_implemented(context: &RequestContext, route_name: &'static str) -> Response {
-    ApiError::not_implemented(context, route_name).into_response()
+    match capabilities::build_runtime_capabilities(&state) {
+        Ok(snapshot) => super::response::success(StatusCode::OK, &context.request_id, snapshot),
+        Err(error) => error.into_response_with_request_id(&context.request_id),
+    }
 }
 
 #[cfg(test)]
@@ -256,12 +246,13 @@ mod tests {
             .await
             .expect("request should succeed");
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key("x-request-id"));
 
         let body: Value = response.json().await.expect("json body should parse");
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["error"]["code"], "NOT_IMPLEMENTED");
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["data"]["node_id"], "node_test");
+        assert_eq!(body["data"]["os"], std::env::consts::OS);
     }
 
     #[tokio::test]

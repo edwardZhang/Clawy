@@ -1,8 +1,13 @@
 pub(crate) mod auth;
 pub(crate) mod bootstrap;
+pub(crate) mod capabilities;
 pub(crate) mod chat_control;
+pub(crate) mod errors;
 pub(crate) mod events;
 pub(crate) mod gateway_adapter;
+pub(crate) mod node;
 pub(crate) mod response;
+pub(crate) mod runtime;
 pub(crate) mod server;
+pub(crate) mod sessions;
 pub(crate) mod ws;

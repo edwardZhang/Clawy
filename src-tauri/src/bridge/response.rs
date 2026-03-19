@@ -20,6 +20,15 @@ pub(crate) struct ApiErrorEnvelope {
     error: ApiErrorBody,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ApiErrorDetail {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+    pub(crate) detail: Option<String>,
+    pub(crate) source: &'static str,
+    pub(crate) retryable: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct ApiErrorBody {
     code: &'static str,
@@ -145,6 +154,7 @@ impl ApiError {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn not_implemented(context: &RequestContext, route_name: &'static str) -> Self {
         Self::custom(
             StatusCode::NOT_IMPLEMENTED,
@@ -162,6 +172,16 @@ impl ApiError {
     fn with_www_authenticate(mut self, value: &'static str) -> Self {
         self.www_authenticate = Some(value);
         self
+    }
+
+    pub(crate) fn detail(&self) -> ApiErrorDetail {
+        ApiErrorDetail {
+            code: self.code,
+            message: self.message.clone(),
+            detail: self.detail.clone(),
+            source: self.source,
+            retryable: self.retryable,
+        }
     }
 }
 
