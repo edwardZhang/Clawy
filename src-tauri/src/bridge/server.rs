@@ -14,6 +14,7 @@ use tauri::AppHandle;
 use tokio::sync::broadcast;
 
 use super::auth::{self, RequestContext};
+use super::chat_control;
 use super::response::ApiError;
 
 #[allow(dead_code)]
@@ -143,8 +144,14 @@ fn session_routes() -> Router<BridgeAppState> {
             "/sessions/{session_id}/history",
             get(session_history_handler),
         )
-        .route("/sessions/{session_id}/send", post(session_send_handler))
-        .route("/sessions/{session_id}/abort", post(session_abort_handler))
+        .route(
+            "/sessions/{session_id}/send",
+            post(chat_control::session_send_handler),
+        )
+        .route(
+            "/sessions/{session_id}/abort",
+            post(chat_control::session_abort_handler),
+        )
 }
 
 fn runtime_routes() -> Router<BridgeAppState> {
@@ -189,20 +196,6 @@ async fn session_history_handler(
     Extension(context): Extension<RequestContext>,
 ) -> Response {
     route_not_implemented(&context, "GET /api/sessions/:session_id/history")
-}
-
-async fn session_send_handler(
-    Path(_session_id): Path<String>,
-    Extension(context): Extension<RequestContext>,
-) -> Response {
-    route_not_implemented(&context, "POST /api/sessions/:session_id/send")
-}
-
-async fn session_abort_handler(
-    Path(_session_id): Path<String>,
-    Extension(context): Extension<RequestContext>,
-) -> Response {
-    route_not_implemented(&context, "POST /api/sessions/:session_id/abort")
 }
 
 async fn runtime_status_handler(Extension(context): Extension<RequestContext>) -> Response {

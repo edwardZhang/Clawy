@@ -43,99 +43,12 @@ pub(crate) struct ApiError {
 }
 
 impl ApiError {
-    pub(crate) fn unauthorized(context: &RequestContext) -> Self {
-        Self::from_context(
-            StatusCode::UNAUTHORIZED,
-            "UNAUTHORIZED",
-            "Missing or invalid bearer token",
-            Some("Provide Authorization: Bearer <token>.".into()),
-            false,
-            context,
-        )
-        .with_www_authenticate(r#"Bearer realm="clawy-bridge""#)
-    }
-
-    pub(crate) fn forbidden_remote(context: &RequestContext) -> Self {
-        Self::from_context(
-            StatusCode::FORBIDDEN,
-            "FORBIDDEN_REMOTE",
-            "Remote address must be loopback",
-            context
-                .remote_addr
-                .map(|remote_addr| format!("remote address `{remote_addr}` is not loopback")),
-            false,
-            context,
-        )
-    }
-
-    pub(crate) fn origin_not_allowed(context: &RequestContext) -> Self {
-        Self::from_context(
-            StatusCode::FORBIDDEN,
-            "ORIGIN_NOT_ALLOWED",
-            "Origin is not allowed for Clawy Bridge",
-            Some(
-                "Configure the Bridge origin allowlist before sending browser-originated requests."
-                    .into(),
-            ),
-            false,
-            context,
-        )
-    }
-
-    pub(crate) fn invalid_request(context: &RequestContext, detail: impl Into<String>) -> Self {
-        Self::from_context(
-            StatusCode::BAD_REQUEST,
-            "INVALID_REQUEST",
-            "Request is not valid for this route",
-            Some(detail.into()),
-            false,
-            context,
-        )
-    }
-
-    pub(crate) fn method_not_allowed(context: &RequestContext) -> Self {
-        Self::from_context(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "METHOD_NOT_ALLOWED",
-            "HTTP method is not allowed for this route",
-            Some(format!(
-                "{} {} is not defined in the current Bridge skeleton",
-                context.method, context.path
-            )),
-            false,
-            context,
-        )
-    }
-
-    pub(crate) fn not_found(context: &RequestContext) -> Self {
-        Self::from_context(
-            StatusCode::NOT_FOUND,
-            "NOT_FOUND",
-            "Route was not found under /api",
-            Some(format!("No handler is registered for {}", context.path)),
-            false,
-            context,
-        )
-    }
-
-    pub(crate) fn not_implemented(context: &RequestContext, route_name: &'static str) -> Self {
-        Self::from_context(
-            StatusCode::NOT_IMPLEMENTED,
-            "NOT_IMPLEMENTED",
-            "Route skeleton is present but no business handler is wired yet",
-            Some(format!(
-                "{route_name} is reserved for a follow-up implementation group."
-            )),
-            false,
-            context,
-        )
-    }
-
-    fn from_context(
+    pub(crate) fn custom(
         status: StatusCode,
         code: &'static str,
         message: impl Into<String>,
         detail: Option<String>,
+        source: &'static str,
         retryable: bool,
         context: &RequestContext,
     ) -> Self {
@@ -144,11 +57,106 @@ impl ApiError {
             code,
             message: message.into(),
             detail,
-            source: "bridge",
+            source,
             retryable,
             request_id: context.request_id.clone(),
             www_authenticate: None,
         }
+    }
+
+    pub(crate) fn unauthorized(context: &RequestContext) -> Self {
+        Self::custom(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHORIZED",
+            "Missing or invalid bearer token",
+            Some("Provide Authorization: Bearer <token>.".into()),
+            "bridge",
+            false,
+            context,
+        )
+        .with_www_authenticate(r#"Bearer realm="clawy-bridge""#)
+    }
+
+    pub(crate) fn forbidden_remote(context: &RequestContext) -> Self {
+        Self::custom(
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN_REMOTE",
+            "Remote address must be loopback",
+            context
+                .remote_addr
+                .map(|remote_addr| format!("remote address `{remote_addr}` is not loopback")),
+            "bridge",
+            false,
+            context,
+        )
+    }
+
+    pub(crate) fn origin_not_allowed(context: &RequestContext) -> Self {
+        Self::custom(
+            StatusCode::FORBIDDEN,
+            "ORIGIN_NOT_ALLOWED",
+            "Origin is not allowed for Clawy Bridge",
+            Some(
+                "Configure the Bridge origin allowlist before sending browser-originated requests."
+                    .into(),
+            ),
+            "bridge",
+            false,
+            context,
+        )
+    }
+
+    pub(crate) fn invalid_request(context: &RequestContext, detail: impl Into<String>) -> Self {
+        Self::custom(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST",
+            "Request is not valid for this route",
+            Some(detail.into()),
+            "bridge",
+            false,
+            context,
+        )
+    }
+
+    pub(crate) fn method_not_allowed(context: &RequestContext) -> Self {
+        Self::custom(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "METHOD_NOT_ALLOWED",
+            "HTTP method is not allowed for this route",
+            Some(format!(
+                "{} {} is not defined in the current Bridge skeleton",
+                context.method, context.path
+            )),
+            "bridge",
+            false,
+            context,
+        )
+    }
+
+    pub(crate) fn not_found(context: &RequestContext) -> Self {
+        Self::custom(
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+            "Route was not found under /api",
+            Some(format!("No handler is registered for {}", context.path)),
+            "bridge",
+            false,
+            context,
+        )
+    }
+
+    pub(crate) fn not_implemented(context: &RequestContext, route_name: &'static str) -> Self {
+        Self::custom(
+            StatusCode::NOT_IMPLEMENTED,
+            "NOT_IMPLEMENTED",
+            "Route skeleton is present but no business handler is wired yet",
+            Some(format!(
+                "{route_name} is reserved for a follow-up implementation group."
+            )),
+            "bridge",
+            false,
+            context,
+        )
     }
 
     fn with_www_authenticate(mut self, value: &'static str) -> Self {
