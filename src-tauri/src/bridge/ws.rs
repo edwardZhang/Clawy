@@ -4,10 +4,12 @@ use axum::extract::{Extension, Query, State};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::time::Duration;
 
 use super::audit;
 use super::auth::RequestContext;
+use super::events::{self, EventReplayCursorStatus};
 use super::gateway_adapter;
 use super::response::ApiError;
 use super::server::BridgeAppState;
@@ -82,26 +84,43 @@ async fn handle_events_socket(
     );
 
     let mut events_rx = state.events_tx.subscribe();
+    let replay = events::replay_events_after(query.last_event_id.as_deref());
     let runtime_snapshot = gateway_adapter::current_runtime_status_snapshot(
         &state.bridge_state,
         &state.config.node_id,
     );
     let mut heartbeat = tokio::time::interval(Duration::from_secs(heartbeat_secs));
     heartbeat.tick().await;
+    let mut replayed_event_ids = HashSet::new();
+    let mut sent_initial_frame = false;
 
-    if matches_filter(&runtime_snapshot, &filter) {
-        match serde_json::to_string(&runtime_snapshot) {
-            Ok(payload) => {
-                if socket.send(Message::Text(payload.into())).await.is_err() {
-                    return;
-                }
-            }
-            Err(error) => {
-                crate::append_log_line(
-                    "WARN",
-                    &format!("Failed to serialize initial runtime snapshot: {error}"),
-                );
-            }
+    if replay.cursor_status == EventReplayCursorStatus::NotFound {
+        let replay_error = replay_cursor_error_event(&state, query.last_event_id.as_deref());
+        if matches_filter(&replay_error, &filter)
+            && send_event_frame(&mut socket, &replay_error).await.is_err()
+        {
+            return;
+        }
+        sent_initial_frame = true;
+    }
+
+    for event in replay.events {
+        if !matches_filter(&event, &filter) {
+            continue;
+        }
+        replayed_event_ids.insert(event.event_id.clone());
+        if send_event_frame(&mut socket, &event).await.is_err() {
+            return;
+        }
+        sent_initial_frame = true;
+    }
+
+    if !sent_initial_frame && matches_filter(&runtime_snapshot, &filter) {
+        if send_event_frame(&mut socket, &runtime_snapshot)
+            .await
+            .is_err()
+        {
+            return;
         }
     }
 
@@ -130,22 +149,15 @@ async fn handle_events_socket(
             },
             outbound = events_rx.recv() => match outbound {
                 Ok(event) => {
+                    if replayed_event_ids.remove(&event.event_id) {
+                        continue;
+                    }
+
                     if !matches_filter(&event, &filter) {
                         continue;
                     }
 
-                    let payload = match serde_json::to_string(&event) {
-                        Ok(payload) => payload,
-                        Err(error) => {
-                            crate::append_log_line(
-                                "WARN",
-                                &format!("Failed to serialize Clawy Bridge event: {error}"),
-                            );
-                            continue;
-                        }
-                    };
-
-                    if socket.send(Message::Text(payload.into())).await.is_err() {
+                    if send_event_frame(&mut socket, &event).await.is_err() {
                         break;
                     }
                 }
@@ -167,6 +179,57 @@ async fn handle_events_socket(
             context.request_id
         ),
     );
+}
+
+async fn send_event_frame(
+    socket: &mut WebSocket,
+    event: &crate::bridge::events::BridgeEventEnvelope,
+) -> Result<(), ()> {
+    let payload = match serde_json::to_string(event) {
+        Ok(payload) => payload,
+        Err(error) => {
+            crate::append_log_line(
+                "WARN",
+                &format!("Failed to serialize Clawy Bridge event: {error}"),
+            );
+            return Ok(());
+        }
+    };
+
+    socket
+        .send(Message::Text(payload.into()))
+        .await
+        .map_err(|_| ())
+}
+
+fn replay_cursor_error_event(
+    state: &BridgeAppState,
+    last_event_id: Option<&str>,
+) -> crate::bridge::events::BridgeEventEnvelope {
+    let detail = last_event_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            format!("last_event_id `{value}` is no longer available in the in-memory replay buffer")
+        })
+        .unwrap_or_else(|| "requested replay cursor is not available".into());
+
+    events::new_event(
+        &state.config.node_id,
+        None,
+        None,
+        "runtime.error",
+        events::runtime_error_payload(
+            events::bridge_error(
+                "EVENT_REPLAY_CURSOR_EXPIRED",
+                "Requested replay cursor is no longer available",
+                Some(detail),
+                "bridge",
+                true,
+            ),
+            false,
+        ),
+    )
 }
 
 fn normalize_heartbeat_secs(value: Option<u64>) -> u64 {
@@ -354,5 +417,102 @@ mod tests {
         assert_eq!(payload["session_id"], "agent:main:main");
         assert_eq!(payload["run_id"], "run_match");
         assert_eq!(payload["type"], "message.delta");
+    }
+
+    #[tokio::test]
+    async fn websocket_replays_events_after_last_event_id() {
+        events::reset_runtime_status_cache();
+        let handle = spawn_server(None, crate::BridgeState::default(), test_config())
+            .expect("bridge server should start");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let first = events::new_event(
+            "node_test",
+            Some("agent:main:main".into()),
+            Some("run_1".into()),
+            "message.delta",
+            serde_json::json!({ "delta": "first" }),
+        );
+        let second = events::new_event(
+            "node_test",
+            Some("agent:main:main".into()),
+            Some("run_1".into()),
+            "message.delta",
+            serde_json::json!({ "delta": "second" }),
+        );
+        events::remember_recent_event(&first);
+        events::remember_recent_event(&second);
+
+        let mut request = format!(
+            "ws://{}/api/v1/events?last_event_id={}",
+            handle.local_addr, first.event_id
+        )
+        .into_client_request()
+        .expect("websocket request should build");
+        request.headers_mut().insert(
+            "Authorization",
+            "Bearer bridge-test-token"
+                .parse()
+                .expect("authorization header should parse"),
+        );
+
+        let (mut socket, _) = connect_async(request)
+            .await
+            .expect("websocket should connect");
+
+        let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("replayed event should arrive")
+            .expect("socket should stay open")
+            .expect("frame should be ok");
+
+        let WsMessage::Text(text) = frame else {
+            panic!("expected text replay frame");
+        };
+        let payload: Value = serde_json::from_str(text.as_ref()).expect("replay json should parse");
+        assert_eq!(payload["event_id"], second.event_id);
+        assert_eq!(payload["payload"]["delta"], "second");
+    }
+
+    #[tokio::test]
+    async fn websocket_reports_expired_replay_cursor() {
+        events::reset_runtime_status_cache();
+        let handle = spawn_server(None, crate::BridgeState::default(), test_config())
+            .expect("bridge server should start");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut request = format!(
+            "ws://{}/api/v1/events?last_event_id=evt_missing",
+            handle.local_addr
+        )
+        .into_client_request()
+        .expect("websocket request should build");
+        request.headers_mut().insert(
+            "Authorization",
+            "Bearer bridge-test-token"
+                .parse()
+                .expect("authorization header should parse"),
+        );
+
+        let (mut socket, _) = connect_async(request)
+            .await
+            .expect("websocket should connect");
+
+        let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("cursor error should arrive")
+            .expect("socket should stay open")
+            .expect("frame should be ok");
+
+        let WsMessage::Text(text) = frame else {
+            panic!("expected text replay error frame");
+        };
+        let payload: Value =
+            serde_json::from_str(text.as_ref()).expect("replay error json should parse");
+        assert_eq!(payload["type"], "runtime.error");
+        assert_eq!(
+            payload["payload"]["error"]["code"],
+            "EVENT_REPLAY_CURSOR_EXPIRED"
+        );
     }
 }

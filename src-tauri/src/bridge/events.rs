@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
+const RECENT_EVENT_CACHE_LIMIT: usize = 512;
+
 static LAST_RUNTIME_STATUS: OnceLock<Mutex<Option<BridgeEventEnvelope>>> = OnceLock::new();
+static RECENT_EVENTS: OnceLock<Mutex<VecDeque<BridgeEventEnvelope>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct BridgeEventEnvelope {
@@ -50,8 +54,25 @@ pub(crate) struct SessionSummary {
     pub(crate) model: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventReplayCursorStatus {
+    Disabled,
+    Found,
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EventReplayBatch {
+    pub(crate) cursor_status: EventReplayCursorStatus,
+    pub(crate) events: Vec<BridgeEventEnvelope>,
+}
+
 fn runtime_status_cache() -> &'static Mutex<Option<BridgeEventEnvelope>> {
     LAST_RUNTIME_STATUS.get_or_init(|| Mutex::new(None))
+}
+
+fn recent_event_cache() -> &'static Mutex<VecDeque<BridgeEventEnvelope>> {
+    RECENT_EVENTS.get_or_init(|| Mutex::new(VecDeque::with_capacity(RECENT_EVENT_CACHE_LIMIT)))
 }
 
 pub(crate) fn new_event(
@@ -131,6 +152,7 @@ pub(crate) fn session_summary_payload(summary: SessionSummary) -> Value {
 }
 
 pub(crate) fn publish_event(event: BridgeEventEnvelope) {
+    remember_recent_event(&event);
     if event.event_type == "runtime.status" {
         remember_runtime_status(&event);
     }
@@ -147,6 +169,48 @@ pub(crate) fn cached_runtime_status() -> Option<BridgeEventEnvelope> {
         .and_then(|guard| guard.clone())
 }
 
+pub(crate) fn replay_events_after(last_event_id: Option<&str>) -> EventReplayBatch {
+    let Some(last_event_id) = last_event_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return EventReplayBatch {
+            cursor_status: EventReplayCursorStatus::Disabled,
+            events: Vec::new(),
+        };
+    };
+
+    let Ok(guard) = recent_event_cache().lock() else {
+        return EventReplayBatch {
+            cursor_status: EventReplayCursorStatus::NotFound,
+            events: Vec::new(),
+        };
+    };
+    let Some(position) = guard
+        .iter()
+        .position(|event| event.event_id == last_event_id)
+    else {
+        return EventReplayBatch {
+            cursor_status: EventReplayCursorStatus::NotFound,
+            events: Vec::new(),
+        };
+    };
+
+    EventReplayBatch {
+        cursor_status: EventReplayCursorStatus::Found,
+        events: guard.iter().skip(position + 1).cloned().collect(),
+    }
+}
+
+pub(crate) fn remember_recent_event(event: &BridgeEventEnvelope) {
+    if let Ok(mut guard) = recent_event_cache().lock() {
+        guard.push_back(event.clone());
+        while guard.len() > RECENT_EVENT_CACHE_LIMIT {
+            guard.pop_front();
+        }
+    }
+}
+
 fn remember_runtime_status(event: &BridgeEventEnvelope) {
     if let Ok(mut guard) = runtime_status_cache().lock() {
         *guard = Some(event.clone());
@@ -157,5 +221,49 @@ fn remember_runtime_status(event: &BridgeEventEnvelope) {
 pub(crate) fn reset_runtime_status_cache() {
     if let Ok(mut guard) = runtime_status_cache().lock() {
         *guard = None;
+    }
+    if let Ok(mut guard) = recent_event_cache().lock() {
+        guard.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replays_events_after_known_cursor() {
+        reset_runtime_status_cache();
+
+        let first = new_event(
+            "node_test",
+            Some("agent:main:main".into()),
+            None,
+            "message.delta",
+            json!({ "delta": "1" }),
+        );
+        let second = new_event(
+            "node_test",
+            Some("agent:main:main".into()),
+            None,
+            "message.delta",
+            json!({ "delta": "2" }),
+        );
+        remember_recent_event(&first);
+        remember_recent_event(&second);
+
+        let replay = replay_events_after(Some(&first.event_id));
+        assert_eq!(replay.cursor_status, EventReplayCursorStatus::Found);
+        assert_eq!(replay.events.len(), 1);
+        assert_eq!(replay.events[0].event_id, second.event_id);
+    }
+
+    #[test]
+    fn reports_missing_cursor_when_not_in_cache() {
+        reset_runtime_status_cache();
+
+        let replay = replay_events_after(Some("evt_missing"));
+        assert_eq!(replay.cursor_status, EventReplayCursorStatus::NotFound);
+        assert!(replay.events.is_empty());
     }
 }
