@@ -63,8 +63,8 @@ pub(crate) struct RuntimeHealthSnapshot {
     pub(crate) issue: Option<RuntimeIssue>,
 }
 
-#[derive(Debug, Serialize)]
-struct NodeInfoData {
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct NodeInfoData {
     node_id: String,
     node_name: String,
     machine_name: String,
@@ -205,7 +205,7 @@ pub(crate) fn load_or_create_node_id(base_dir: &Path) -> Result<String, String> 
     Ok(identity.node_id)
 }
 
-fn build_node_info(state: &BridgeAppState) -> Result<NodeInfoData, String> {
+pub(crate) fn build_node_info(state: &BridgeAppState) -> Result<NodeInfoData, String> {
     let machine_name = machine_name();
     let node_id = if state.config.node_id.trim().is_empty() {
         load_or_create_node_id(&state.config.clawy_base_dir)?
