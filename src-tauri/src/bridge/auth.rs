@@ -63,7 +63,7 @@ pub(crate) async fn enforce_request_auth(
     response
 }
 
-fn extract_request_id(headers: &HeaderMap) -> String {
+pub(crate) fn extract_request_id(headers: &HeaderMap) -> String {
     headers
         .get(REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -73,7 +73,7 @@ fn extract_request_id(headers: &HeaderMap) -> String {
         .unwrap_or_else(|| format!("req_{}", Uuid::new_v4().simple()))
 }
 
-fn extract_caller_id(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn extract_caller_id(headers: &HeaderMap) -> Option<String> {
     CALLER_ID_HEADERS.iter().find_map(|header_name| {
         headers
             .get(*header_name)

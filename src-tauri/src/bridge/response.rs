@@ -6,6 +6,8 @@ use serde::Serialize;
 use super::auth::RequestContext;
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
+const API_VERSION_HEADER: &str = "x-clawy-bridge-api-version";
+pub(crate) const BRIDGE_API_VERSION: &str = "v1";
 
 #[allow(dead_code)]
 #[derive(Debug, Serialize)]
@@ -233,4 +235,12 @@ pub(crate) fn attach_request_id(response: &mut Response, request_id: &str) {
             .headers_mut()
             .insert(HeaderName::from_static(REQUEST_ID_HEADER), value);
     }
+    attach_api_version(response);
+}
+
+pub(crate) fn attach_api_version(response: &mut Response) {
+    response.headers_mut().insert(
+        HeaderName::from_static(API_VERSION_HEADER),
+        HeaderValue::from_static(BRIDGE_API_VERSION),
+    );
 }

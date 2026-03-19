@@ -9,6 +9,7 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{connect, Message, WebSocket};
 use uuid::Uuid;
 
+use super::audit;
 use super::auth::RequestContext;
 use super::response::{self, ApiError};
 use super::server::BridgeAppState;
@@ -45,11 +46,28 @@ pub(crate) async fn session_send_handler(
 
     let request_id = context.request_id.clone();
     let task_context = context.clone();
+    let task_state = state.clone();
 
-    match tokio::task::spawn_blocking(move || process_send(state, task_context, session_id, body))
-        .await
+    match tokio::task::spawn_blocking(move || {
+        process_send(task_state, task_context, session_id, body)
+    })
+    .await
     {
-        Ok(Ok(data)) => response::success(StatusCode::ACCEPTED, &request_id, data),
+        Ok(Ok(data)) => {
+            audit::log_key_action(
+                &state,
+                &context.request_id,
+                context.caller_id.as_deref(),
+                "session.send",
+                data.get("session_id").and_then(Value::as_str),
+                "accepted",
+                data.get("run_id")
+                    .and_then(Value::as_str)
+                    .map(|run_id| format!("run_id={run_id}"))
+                    .as_deref(),
+            );
+            response::success(StatusCode::ACCEPTED, &request_id, data)
+        }
         Ok(Err(error)) => error.into_response(),
         Err(error) => ApiError::custom(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -71,10 +89,26 @@ pub(crate) async fn session_abort_handler(
 ) -> Response {
     let request_id = context.request_id.clone();
     let task_context = context.clone();
+    let task_state = state.clone();
 
-    match tokio::task::spawn_blocking(move || process_abort(state, task_context, session_id)).await
+    match tokio::task::spawn_blocking(move || process_abort(task_state, task_context, session_id))
+        .await
     {
-        Ok(Ok(data)) => response::success(StatusCode::ACCEPTED, &request_id, data),
+        Ok(Ok(data)) => {
+            audit::log_key_action(
+                &state,
+                &context.request_id,
+                context.caller_id.as_deref(),
+                "session.abort",
+                data.get("session_id").and_then(Value::as_str),
+                "accepted",
+                data.get("run_id")
+                    .and_then(Value::as_str)
+                    .map(|run_id| format!("run_id={run_id}"))
+                    .as_deref(),
+            );
+            response::success(StatusCode::ACCEPTED, &request_id, data)
+        }
         Ok(Err(error)) => error.into_response(),
         Err(error) => ApiError::custom(
             StatusCode::INTERNAL_SERVER_ERROR,

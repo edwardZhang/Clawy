@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 use tokio::sync::broadcast;
 
+use super::audit;
 use super::auth::{self, RequestContext};
 use super::capabilities;
 use super::chat_control;
@@ -116,9 +117,16 @@ pub(crate) fn build_router(state: BridgeAppState) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::enforce_request_auth,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            audit::log_http_request,
         ));
 
-    Router::new().nest("/api", api_router).with_state(state)
+    Router::new()
+        .nest("/api", api_router.clone())
+        .nest("/api/v1", api_router)
+        .with_state(state)
 }
 
 fn node_routes() -> Router<BridgeAppState> {
@@ -240,7 +248,7 @@ mod tests {
     async fn exposes_authorized_route_skeletons() {
         let handle = spawn_test_server().await;
         let response = test_client()
-            .get(format!("http://{}/api/node/info", handle.local_addr))
+            .get(format!("http://{}/api/v1/node/info", handle.local_addr))
             .header("Authorization", "Bearer bridge-test-token")
             .send()
             .await
@@ -248,6 +256,13 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.headers().contains_key("x-request-id"));
+        assert_eq!(
+            response
+                .headers()
+                .get("x-clawy-bridge-api-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("v1")
+        );
 
         let body: Value = response.json().await.expect("json body should parse");
         assert_eq!(body["ok"], true);

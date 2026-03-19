@@ -1,22 +1,50 @@
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Query, State};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
+use serde::Deserialize;
+use std::time::Duration;
 
 use super::auth::RequestContext;
 use super::gateway_adapter;
 use super::response::ApiError;
 use super::server::BridgeAppState;
 
+const DEFAULT_WS_PING_INTERVAL_SECS: u64 = 20;
+const MIN_WS_PING_INTERVAL_SECS: u64 = 5;
+const MAX_WS_PING_INTERVAL_SECS: u64 = 120;
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct EventsWsQuery {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default, rename = "type")]
+    event_type: Option<String>,
+    #[serde(default)]
+    heartbeat_secs: Option<u64>,
+    #[serde(default)]
+    last_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EventFilter {
+    session_id: Option<String>,
+    run_id: Option<String>,
+    event_type: Option<String>,
+}
+
 pub(crate) async fn events_ws_handler(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    Query(query): Query<EventsWsQuery>,
     State(state): State<BridgeAppState>,
     Extension(context): Extension<RequestContext>,
 ) -> Response {
     match ws {
         Ok(upgrade) => upgrade
-            .on_upgrade(move |socket| handle_events_socket(socket, context, state))
+            .on_upgrade(move |socket| handle_events_socket(socket, context, state, query))
             .into_response(),
         Err(_) => {
             ApiError::invalid_request(&context, "This route requires a WebSocket upgrade request.")
@@ -29,13 +57,26 @@ async fn handle_events_socket(
     mut socket: WebSocket,
     context: RequestContext,
     state: BridgeAppState,
+    query: EventsWsQuery,
 ) {
+    let filter = EventFilter {
+        session_id: query.session_id.clone(),
+        run_id: query.run_id.clone(),
+        event_type: query.event_type.clone(),
+    };
+    let heartbeat_secs = normalize_heartbeat_secs(query.heartbeat_secs);
+
     crate::append_log_line(
         "INFO",
         &format!(
-            "Clawy Bridge WS connected: request_id={} caller_id={}",
+            "Clawy Bridge WS connected: request_id={} caller_id={} session_filter={} run_filter={} type_filter={} last_event_id={} heartbeat_secs={}",
             context.request_id,
-            context.caller_id.as_deref().unwrap_or("unknown")
+            context.caller_id.as_deref().unwrap_or("unknown"),
+            filter.session_id.as_deref().unwrap_or("-"),
+            filter.run_id.as_deref().unwrap_or("-"),
+            filter.event_type.as_deref().unwrap_or("-"),
+            query.last_event_id.as_deref().unwrap_or("-"),
+            heartbeat_secs,
         ),
     );
 
@@ -44,23 +85,32 @@ async fn handle_events_socket(
         &state.bridge_state,
         &state.config.node_id,
     );
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(heartbeat_secs));
+    heartbeat.tick().await;
 
-    match serde_json::to_string(&runtime_snapshot) {
-        Ok(payload) => {
-            if socket.send(Message::Text(payload.into())).await.is_err() {
-                return;
+    if matches_filter(&runtime_snapshot, &filter) {
+        match serde_json::to_string(&runtime_snapshot) {
+            Ok(payload) => {
+                if socket.send(Message::Text(payload.into())).await.is_err() {
+                    return;
+                }
             }
-        }
-        Err(error) => {
-            crate::append_log_line(
-                "WARN",
-                &format!("Failed to serialize initial runtime snapshot: {error}"),
-            );
+            Err(error) => {
+                crate::append_log_line(
+                    "WARN",
+                    &format!("Failed to serialize initial runtime snapshot: {error}"),
+                );
+            }
         }
     }
 
     loop {
         tokio::select! {
+            _ = heartbeat.tick() => {
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+            }
             inbound = socket.next() => match inbound {
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Ok(Message::Ping(payload))) => {
@@ -79,6 +129,10 @@ async fn handle_events_socket(
             },
             outbound = events_rx.recv() => match outbound {
                 Ok(event) => {
+                    if !matches_filter(&event, &filter) {
+                        continue;
+                    }
+
                     let payload = match serde_json::to_string(&event) {
                         Ok(payload) => payload,
                         Err(error) => {
@@ -112,6 +166,43 @@ async fn handle_events_socket(
             context.request_id
         ),
     );
+}
+
+fn normalize_heartbeat_secs(value: Option<u64>) -> u64 {
+    value
+        .unwrap_or(DEFAULT_WS_PING_INTERVAL_SECS)
+        .clamp(MIN_WS_PING_INTERVAL_SECS, MAX_WS_PING_INTERVAL_SECS)
+}
+
+fn matches_filter(
+    event: &crate::bridge::events::BridgeEventEnvelope,
+    filter: &EventFilter,
+) -> bool {
+    if filter
+        .session_id
+        .as_deref()
+        .is_some_and(|session_id| event.session_id.as_deref() != Some(session_id))
+    {
+        return false;
+    }
+
+    if filter
+        .run_id
+        .as_deref()
+        .is_some_and(|run_id| event.run_id.as_deref() != Some(run_id))
+    {
+        return false;
+    }
+
+    if filter
+        .event_type
+        .as_deref()
+        .is_some_and(|event_type| event.event_type != event_type)
+    {
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -199,5 +290,68 @@ mod tests {
         assert_eq!(second_payload["type"], "message.delta");
         assert_eq!(second_payload["run_id"], "run_1");
         assert_eq!(second_payload["payload"]["delta"], "hello");
+    }
+
+    #[tokio::test]
+    async fn websocket_supports_session_filtering() {
+        events::reset_runtime_status_cache();
+        let handle = spawn_server(None, crate::BridgeState::default(), test_config())
+            .expect("bridge server should start");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut request = format!(
+            "ws://{}/api/v1/events?session_id=agent:main:main&type=message.delta",
+            handle.local_addr
+        )
+        .into_client_request()
+        .expect("websocket request should build");
+        request.headers_mut().insert(
+            "Authorization",
+            "Bearer bridge-test-token"
+                .parse()
+                .expect("authorization header should parse"),
+        );
+
+        let (mut socket, _) = connect_async(request)
+            .await
+            .expect("websocket should connect");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        handle
+            .events_tx
+            .send(events::new_event(
+                "node_test",
+                Some("agent:other:chat".into()),
+                Some("run_skip".into()),
+                "message.delta",
+                serde_json::json!({ "delta": "skip" }),
+            ))
+            .expect("event send should succeed");
+
+        handle
+            .events_tx
+            .send(events::new_event(
+                "node_test",
+                Some("agent:main:main".into()),
+                Some("run_match".into()),
+                "message.delta",
+                serde_json::json!({ "delta": "match" }),
+            ))
+            .expect("event send should succeed");
+
+        let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("filtered event should arrive")
+            .expect("socket should stay open")
+            .expect("frame should be ok");
+
+        let WsMessage::Text(text) = frame else {
+            panic!("expected text frame");
+        };
+        let payload: Value =
+            serde_json::from_str(text.as_ref()).expect("filtered json should parse");
+        assert_eq!(payload["session_id"], "agent:main:main");
+        assert_eq!(payload["run_id"], "run_match");
+        assert_eq!(payload["type"], "message.delta");
     }
 }
