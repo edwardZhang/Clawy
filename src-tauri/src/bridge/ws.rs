@@ -6,6 +6,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use std::time::Duration;
 
+use super::audit;
 use super::auth::RequestContext;
 use super::gateway_adapter;
 use super::response::ApiError;
@@ -71,11 +72,11 @@ async fn handle_events_socket(
         &format!(
             "Clawy Bridge WS connected: request_id={} caller_id={} session_filter={} run_filter={} type_filter={} last_event_id={} heartbeat_secs={}",
             context.request_id,
-            context.caller_id.as_deref().unwrap_or("unknown"),
-            filter.session_id.as_deref().unwrap_or("-"),
-            filter.run_id.as_deref().unwrap_or("-"),
+            audit::redact_value(context.caller_id.as_deref()),
+            audit::redact_value(filter.session_id.as_deref()),
+            audit::redact_value(filter.run_id.as_deref()),
             filter.event_type.as_deref().unwrap_or("-"),
-            query.last_event_id.as_deref().unwrap_or("-"),
+            audit::redact_value(query.last_event_id.as_deref()),
             heartbeat_secs,
         ),
     );
