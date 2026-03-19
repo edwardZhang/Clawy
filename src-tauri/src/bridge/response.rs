@@ -95,10 +95,10 @@ impl ApiError {
         Self::custom(
             StatusCode::FORBIDDEN,
             "FORBIDDEN_REMOTE",
-            "Remote address must be loopback",
-            context
-                .remote_addr
-                .map(|remote_addr| format!("remote address `{remote_addr}` is not loopback")),
+            "Remote address is not allowed by the Bridge network policy",
+            context.remote_addr.map(|remote_addr| {
+                format!("remote address `{remote_addr}` is outside the allowed local/LAN scope")
+            }),
             "bridge",
             false,
             context,

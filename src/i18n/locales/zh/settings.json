@@ -217,17 +217,36 @@
   },
   "bridge": {
     "title": "Clawy Bridge",
-    "description": "管理 ForgeAI 连接到本机 Clawy 所使用的 API 地址与令牌。",
+    "description": "管理 ForgeAI 连接当前 Clawy 节点所使用的地址、局域网访问策略与令牌。",
     "nodeId": "节点 ID",
+    "accessMode": "访问模式",
+    "listenHost": "监听地址",
+    "listenHostDesc": "本机模式监听 127.0.0.1；开启局域网模式后会监听 0.0.0.0。",
     "tokenSource": "令牌来源",
     "apiBaseUrl": "Bridge API 地址",
+    "publicBaseUrl": "对外 API 地址",
+    "publicBaseUrlDesc": "用于 ForgeAI 或其他局域网客户端访问当前节点。留空时会按当前监听地址推导。",
+    "trustedCidrs": "可信局域网地址 / CIDR",
+    "trustedCidrsDesc": "可选。留空时允许所有私有局域网地址访问；填写后只允许这些 IP 或网段访问。",
+    "trustedCidrsPlaceholder": "192.168.1.0/24\n192.168.1.23",
+    "allowedOrigins": "允许的浏览器 Origin",
+    "allowedOriginsDesc": "仅浏览器请求会校验 Origin。若 ForgeAI Web 前端直连 Bridge，请在这里加入其 Origin。",
+    "allowedOriginsPlaceholder": "http://192.168.1.50:3000\nhttps://forge.example.com",
     "token": "Bridge 令牌",
     "tokenDesc": "ForgeAI 连接当前 Clawy 节点时使用这个 Bearer token。",
     "restartNote": "重新生成令牌后，Clawy 会自动重启以让新令牌立即生效。",
+    "networkRestartNote": "保存网络配置后，Clawy 会自动重启以应用新的监听与访问策略。",
+    "networkRestartHint": "默认只允许本机访问。开启局域网模式后，仍然需要 Bearer token，浏览器请求还需要命中 Origin allowlist。",
     "envManaged": "环境变量管理",
     "localManaged": "本地配置管理",
     "envManagedHelp": "当前令牌由环境变量 CLAWY_BRIDGE_TOKEN 提供，不能在 UI 中重新生成。",
+    "lanDesc": "允许局域网内的可信客户端访问当前 Clawy 节点。",
+    "localDesc": "仅允许当前机器本机访问。",
     "unavailable": "暂不可用",
+    "modes": {
+      "local": "仅本机",
+      "lan": "局域网可访问"
+    },
     "sources": {
       "env": "环境变量",
       "local": "本地生成"
@@ -240,11 +259,18 @@
       "title": "重新生成 Bridge 令牌",
       "message": "重新生成后，现有连接需要改用新令牌。Clawy 会自动重启以应用新令牌。"
     },
+    "networkDialog": {
+      "title": "保存 Bridge 网络配置",
+      "message": "保存后 Clawy 会自动重启，以应用新的监听地址、局域网访问策略与 Origin allowlist。"
+    },
     "toast": {
       "tokenCopied": "Bridge 令牌已复制",
       "apiCopied": "Bridge API 地址已复制",
       "copyFailed": "复制失败：{{error}}",
       "loadFailed": "加载 Bridge 信息失败：{{error}}",
+      "networkLoadFailed": "加载 Bridge 网络配置失败：{{error}}",
+      "networkSaved": "Bridge 网络配置已保存，Clawy 即将重启。",
+      "networkSaveFailed": "保存 Bridge 网络配置失败：{{error}}",
       "regenerated": "Bridge 令牌已重新生成，Clawy 即将重启。",
       "regenerateFailed": "重新生成 Bridge 令牌失败：{{error}}"
     }

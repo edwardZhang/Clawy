@@ -28,6 +28,7 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
+import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { useSettingsStore } from '@/stores/settings';
 import { useGatewayStore } from '@/stores/gateway';
@@ -48,6 +49,17 @@ type BridgeTokenInfo = {
   tokenSource: 'env' | 'local' | string;
   managedByEnv: boolean;
   configPath: string;
+  baseUrl: string;
+  apiBaseUrl: string;
+  restartRequired: boolean;
+};
+
+type BridgeNetworkConfig = {
+  lanEnabled: boolean;
+  listenHost: string;
+  trustedRemoteCidrs: string[];
+  allowedOrigins: string[];
+  publicBaseUrl: string;
   baseUrl: string;
   apiBaseUrl: string;
   restartRequired: boolean;
@@ -156,6 +168,13 @@ function describeInstallProgress(payload: RuntimeInstallEventPayload): string | 
   return undefined;
 }
 
+function splitListInput(value: string): string[] {
+  return value
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
 export function Settings() {
   const { t } = useTranslation('settings');
   const {
@@ -195,6 +214,15 @@ export function Settings() {
   const [bridgeTokenError, setBridgeTokenError] = useState<string | null>(null);
   const [bridgeTokenRegenerating, setBridgeTokenRegenerating] = useState(false);
   const [showBridgeTokenConfirm, setShowBridgeTokenConfirm] = useState(false);
+  const [bridgeNetworkConfig, setBridgeNetworkConfig] = useState<BridgeNetworkConfig | null>(null);
+  const [bridgeNetworkLoading, setBridgeNetworkLoading] = useState(false);
+  const [bridgeNetworkSaving, setBridgeNetworkSaving] = useState(false);
+  const [bridgeNetworkError, setBridgeNetworkError] = useState<string | null>(null);
+  const [showBridgeNetworkConfirm, setShowBridgeNetworkConfirm] = useState(false);
+  const [bridgeLanEnabledDraft, setBridgeLanEnabledDraft] = useState(false);
+  const [bridgeTrustedCidrsDraft, setBridgeTrustedCidrsDraft] = useState('');
+  const [bridgeAllowedOriginsDraft, setBridgeAllowedOriginsDraft] = useState('');
+  const [bridgePublicBaseUrlDraft, setBridgePublicBaseUrlDraft] = useState('');
   const [openclawCliCommand, setOpenclawCliCommand] = useState('');
   const [openclawCliError, setOpenclawCliError] = useState<string | null>(null);
   const [openclawCliLoading, setOpenclawCliLoading] = useState(false);
@@ -398,6 +426,23 @@ export function Settings() {
     }
   }, [t]);
 
+  const refreshBridgeNetworkConfig = useCallback(async (showErrorToast = false) => {
+    setBridgeNetworkLoading(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('bridge:getNetworkConfig') as BridgeNetworkConfig;
+      setBridgeNetworkConfig(result);
+      setBridgeNetworkError(null);
+    } catch (error) {
+      const message = String(error);
+      setBridgeNetworkError(message);
+      if (showErrorToast) {
+        toast.error(t('bridge.toast.networkLoadFailed', { error: message }));
+      }
+    } finally {
+      setBridgeNetworkLoading(false);
+    }
+  }, [t]);
+
   const loadOpenClawCliCommand = useCallback(async () => {
     if (!showCliTools) return;
     setOpenclawCliLoading(true);
@@ -467,9 +512,10 @@ export function Settings() {
   };
 
   const handleCopyBridgeApiUrl = async () => {
-    if (!bridgeTokenInfo?.apiBaseUrl) return;
+    const apiBaseUrl = bridgeNetworkConfig?.apiBaseUrl || bridgeTokenInfo?.apiBaseUrl;
+    if (!apiBaseUrl) return;
     try {
-      await navigator.clipboard.writeText(bridgeTokenInfo.apiBaseUrl);
+      await navigator.clipboard.writeText(apiBaseUrl);
       toast.success(t('bridge.toast.apiCopied'));
     } catch (error) {
       toast.error(t('bridge.toast.copyFailed', { error: String(error) }));
@@ -493,6 +539,36 @@ export function Settings() {
       toast.error(t('bridge.toast.regenerateFailed', { error: String(error) }));
     } finally {
       setBridgeTokenRegenerating(false);
+    }
+  };
+
+  const handleConfirmBridgeNetworkSave = async () => {
+    setBridgeNetworkSaving(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('bridge:updateNetworkConfig', {
+        lanEnabled: bridgeLanEnabledDraft,
+        trustedRemoteCidrs: splitListInput(bridgeTrustedCidrsDraft),
+        allowedOrigins: splitListInput(bridgeAllowedOriginsDraft),
+        publicBaseUrl: bridgePublicBaseUrlDraft.trim(),
+      }) as BridgeNetworkConfig;
+      setBridgeNetworkConfig(result);
+      setBridgeNetworkError(null);
+      setShowBridgeNetworkConfirm(false);
+      setBridgeTokenInfo((current) => current ? {
+        ...current,
+        baseUrl: result.baseUrl,
+        apiBaseUrl: result.apiBaseUrl,
+      } : current);
+      toast.success(t('bridge.toast.networkSaved'));
+      if (result.restartRequired) {
+        window.setTimeout(() => {
+          void desktopApi.ipcRenderer.invoke('app:relaunch');
+        }, 400);
+      }
+    } catch (error) {
+      toast.error(t('bridge.toast.networkSaveFailed', { error: String(error) }));
+    } finally {
+      setBridgeNetworkSaving(false);
     }
   };
 
@@ -522,6 +598,7 @@ export function Settings() {
       window.requestAnimationFrame(() => {
         if (!cancelled) {
           void refreshBridgeTokenInfo();
+          void refreshBridgeNetworkConfig();
         }
       });
     }, 80);
@@ -530,7 +607,14 @@ export function Settings() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [refreshBridgeTokenInfo]);
+  }, [refreshBridgeNetworkConfig, refreshBridgeTokenInfo]);
+
+  useEffect(() => {
+    setBridgeLanEnabledDraft(bridgeNetworkConfig?.lanEnabled ?? false);
+    setBridgeTrustedCidrsDraft((bridgeNetworkConfig?.trustedRemoteCidrs ?? []).join('\n'));
+    setBridgeAllowedOriginsDraft((bridgeNetworkConfig?.allowedOrigins ?? []).join('\n'));
+    setBridgePublicBaseUrlDraft(bridgeNetworkConfig?.publicBaseUrl ?? '');
+  }, [bridgeNetworkConfig]);
 
   const handleCopyCliCommand = async () => {
     if (!openclawCliCommand) return;
@@ -645,6 +729,13 @@ export function Settings() {
         openclawLastFailedInstallStrategy === 'official'
         || (!!openclawRuntimeError && !!openclawRuntimeStatus?.officialError)
       ),
+  );
+
+  const bridgeNetworkDirty = bridgeNetworkConfig !== null && (
+    bridgeLanEnabledDraft !== bridgeNetworkConfig.lanEnabled
+      || bridgePublicBaseUrlDraft.trim() !== bridgeNetworkConfig.publicBaseUrl
+      || JSON.stringify(splitListInput(bridgeTrustedCidrsDraft)) !== JSON.stringify(bridgeNetworkConfig.trustedRemoteCidrs)
+      || JSON.stringify(splitListInput(bridgeAllowedOriginsDraft)) !== JSON.stringify(bridgeNetworkConfig.allowedOrigins)
   );
 
   useEffect(() => {
@@ -1193,36 +1284,115 @@ export function Settings() {
             </div>
           </div>
 
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>{t('bridge.accessMode')}</Label>
+              <div className="flex items-center justify-between rounded-lg border border-border/60 bg-background/40 p-3">
+                <div>
+                  <p className="text-sm font-medium">
+                    {bridgeLanEnabledDraft ? t('bridge.modes.lan') : t('bridge.modes.local')}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {bridgeLanEnabledDraft ? t('bridge.lanDesc') : t('bridge.localDesc')}
+                  </p>
+                </div>
+                <Switch
+                  checked={bridgeLanEnabledDraft}
+                  onCheckedChange={setBridgeLanEnabledDraft}
+                  disabled={bridgeNetworkLoading || bridgeNetworkSaving}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>{t('bridge.listenHost')}</Label>
+              <Input
+                readOnly
+                value={bridgeNetworkConfig?.listenHost || ''}
+                placeholder={t('bridge.unavailable')}
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t('bridge.listenHostDesc')}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t('bridge.publicBaseUrl')}</Label>
+            <Input
+              value={bridgePublicBaseUrlDraft}
+              onChange={(event) => setBridgePublicBaseUrlDraft(event.target.value)}
+              placeholder="http://192.168.1.10:18790"
+              className="font-mono"
+              disabled={bridgeNetworkSaving}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('bridge.publicBaseUrlDesc')}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t('bridge.trustedCidrs')}</Label>
+            <Textarea
+              value={bridgeTrustedCidrsDraft}
+              onChange={(event) => setBridgeTrustedCidrsDraft(event.target.value)}
+              placeholder={t('bridge.trustedCidrsPlaceholder')}
+              disabled={bridgeNetworkSaving}
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('bridge.trustedCidrsDesc')}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t('bridge.allowedOrigins')}</Label>
+            <Textarea
+              value={bridgeAllowedOriginsDraft}
+              onChange={(event) => setBridgeAllowedOriginsDraft(event.target.value)}
+              placeholder={t('bridge.allowedOriginsPlaceholder')}
+              disabled={bridgeNetworkSaving}
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('bridge.allowedOriginsDesc')}
+            </p>
+          </div>
+
           <div className="space-y-2">
             <Label>{t('bridge.apiBaseUrl')}</Label>
             <div className="flex flex-col gap-2 md:flex-row">
               <Input
                 readOnly
-                value={bridgeTokenInfo?.apiBaseUrl || ''}
+                value={bridgeNetworkConfig?.apiBaseUrl || bridgeTokenInfo?.apiBaseUrl || ''}
                 placeholder={t('bridge.unavailable')}
                 className="font-mono"
               />
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => { void refreshBridgeTokenInfo(true); }}
-                disabled={bridgeTokenLoading || bridgeTokenRegenerating}
+                onClick={() => {
+                  void refreshBridgeTokenInfo(true);
+                  void refreshBridgeNetworkConfig(true);
+                }}
+                disabled={bridgeTokenLoading || bridgeTokenRegenerating || bridgeNetworkLoading || bridgeNetworkSaving}
               >
-                <RefreshCw className={`h-4 w-4 mr-2${bridgeTokenLoading ? ' animate-spin' : ''}`} />
+                <RefreshCw className={`h-4 w-4 mr-2${bridgeTokenLoading || bridgeNetworkLoading ? ' animate-spin' : ''}`} />
                 {t('common:actions.refresh')}
               </Button>
               <Button
                 type="button"
                 variant="outline"
                 onClick={handleCopyBridgeApiUrl}
-                disabled={!bridgeTokenInfo?.apiBaseUrl}
+                disabled={!bridgeNetworkConfig?.apiBaseUrl && !bridgeTokenInfo?.apiBaseUrl}
               >
                 <Copy className="h-4 w-4 mr-2" />
                 {t('common:actions.copy')}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground break-all">
-              {bridgeTokenInfo?.baseUrl || bridgeTokenInfo?.configPath || t('bridge.unavailable')}
+              {bridgeNetworkConfig?.baseUrl || bridgeTokenInfo?.baseUrl || bridgeTokenInfo?.configPath || t('bridge.unavailable')}
             </p>
           </div>
 
@@ -1262,9 +1432,31 @@ export function Settings() {
             </p>
           </div>
 
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-background/40 p-3">
+            <div>
+              <p className="text-sm text-muted-foreground">{t('bridge.networkRestartNote')}</p>
+              <p className="text-xs text-muted-foreground">{t('bridge.networkRestartHint')}</p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowBridgeNetworkConfirm(true)}
+              disabled={!bridgeNetworkDirty || bridgeNetworkLoading || bridgeNetworkSaving}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2${bridgeNetworkSaving ? ' animate-spin' : ''}`} />
+              {bridgeNetworkSaving ? t('common:status.saving') : t('common:actions.save')}
+            </Button>
+          </div>
+
           {bridgeTokenError ? (
             <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">
               {bridgeTokenError}
+            </div>
+          ) : null}
+
+          {bridgeNetworkError ? (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">
+              {bridgeNetworkError}
             </div>
           ) : null}
         </CardContent>
@@ -1397,6 +1589,20 @@ export function Settings() {
         onCancel={() => {
           if (!bridgeTokenRegenerating) {
             setShowBridgeTokenConfirm(false);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={showBridgeNetworkConfirm}
+        title={t('bridge.networkDialog.title')}
+        message={t('bridge.networkDialog.message')}
+        confirmLabel={t('common:actions.save')}
+        cancelLabel={t('common:actions.cancel')}
+        onConfirm={() => { void handleConfirmBridgeNetworkSave(); }}
+        onCancel={() => {
+          if (!bridgeNetworkSaving) {
+            setShowBridgeNetworkConfirm(false);
           }
         }}
       />

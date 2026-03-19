@@ -217,17 +217,36 @@
   },
   "bridge": {
     "title": "Clawy Bridge",
-    "description": "Manage the API address and token ForgeAI uses to connect to this Clawy node.",
+    "description": "Manage the address, LAN access policy, and token ForgeAI uses to connect to this Clawy node.",
     "nodeId": "Node ID",
+    "accessMode": "Access Mode",
+    "listenHost": "Listen Address",
+    "listenHostDesc": "Local mode listens on 127.0.0.1. LAN mode listens on 0.0.0.0.",
     "tokenSource": "Token Source",
     "apiBaseUrl": "Bridge API URL",
+    "publicBaseUrl": "Public API URL",
+    "publicBaseUrlDesc": "Use this URL when ForgeAI or another LAN client connects to this node. Leave blank to derive it from the active listener.",
+    "trustedCidrs": "Trusted LAN IPs / CIDRs",
+    "trustedCidrsDesc": "Optional. Leave blank to allow any private LAN address. Fill this to restrict access to specific IPs or CIDR ranges.",
+    "trustedCidrsPlaceholder": "192.168.1.0/24\n192.168.1.23",
+    "allowedOrigins": "Allowed Browser Origins",
+    "allowedOriginsDesc": "Only browser-originated requests check Origin. Add the ForgeAI web app origin here if it connects directly to Bridge.",
+    "allowedOriginsPlaceholder": "http://192.168.1.50:3000\nhttps://forge.example.com",
     "token": "Bridge Token",
     "tokenDesc": "ForgeAI uses this Bearer token when connecting to the current Clawy node.",
     "restartNote": "Regenerating the token restarts Clawy automatically so the new token takes effect immediately.",
+    "networkRestartNote": "Saving network settings restarts Clawy automatically so the new listener and access policy take effect.",
+    "networkRestartHint": "Local-only access remains the default. In LAN mode, Bridge still requires the Bearer token, and browser requests must also match the Origin allowlist.",
     "envManaged": "Managed by environment",
     "localManaged": "Managed locally",
     "envManagedHelp": "This token comes from the CLAWY_BRIDGE_TOKEN environment variable and cannot be regenerated from the UI.",
+    "lanDesc": "Allow trusted clients on the local network to reach this Clawy node.",
+    "localDesc": "Only allow access from this machine.",
     "unavailable": "Unavailable",
+    "modes": {
+      "local": "Local only",
+      "lan": "LAN enabled"
+    },
     "sources": {
       "env": "Environment",
       "local": "Local"
@@ -240,11 +259,18 @@
       "title": "Regenerate Bridge Token",
       "message": "Regenerating the token invalidates existing clients until they use the new token. Clawy will restart automatically to apply it."
     },
+    "networkDialog": {
+      "title": "Save Bridge Network Settings",
+      "message": "Saving restarts Clawy so the new listen address, LAN access policy, and Origin allowlist can take effect."
+    },
     "toast": {
       "tokenCopied": "Bridge token copied",
       "apiCopied": "Bridge API URL copied",
       "copyFailed": "Failed to copy: {{error}}",
       "loadFailed": "Failed to load Bridge info: {{error}}",
+      "networkLoadFailed": "Failed to load Bridge network config: {{error}}",
+      "networkSaved": "Bridge network settings saved. Clawy will restart now.",
+      "networkSaveFailed": "Failed to save Bridge network settings: {{error}}",
       "regenerated": "Bridge token regenerated. Clawy will restart now.",
       "regenerateFailed": "Failed to regenerate Bridge token: {{error}}"
     }

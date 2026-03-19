@@ -4,6 +4,7 @@ use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use ipnet::IpNet;
 use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -25,6 +26,8 @@ use super::ws::events_ws_handler;
 pub(crate) struct BridgeRuntimeConfig {
     pub(crate) listen_addr: SocketAddr,
     pub(crate) auth_token: String,
+    pub(crate) lan_enabled: bool,
+    pub(crate) trusted_remote_cidrs: Vec<IpNet>,
     pub(crate) allowed_origins: Vec<String>,
     pub(crate) clawy_base_dir: PathBuf,
     pub(crate) node_id: String,
@@ -208,6 +211,8 @@ mod tests {
         BridgeRuntimeConfig {
             listen_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             auth_token: "bridge-test-token".into(),
+            lan_enabled: false,
+            trusted_remote_cidrs: Vec::new(),
             allowed_origins: Vec::new(),
             clawy_base_dir: PathBuf::from("."),
             node_id: "node_test".into(),

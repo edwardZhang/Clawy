@@ -392,6 +392,8 @@ mod tests {
             config: super::super::server::BridgeRuntimeConfig {
                 listen_addr: SocketAddr::from(([127, 0, 0, 1], 18790)),
                 auth_token: "bridge-node-token".into(),
+                lan_enabled: false,
+                trusted_remote_cidrs: Vec::new(),
                 allowed_origins: Vec::new(),
                 clawy_base_dir,
                 node_id: "node_test".into(),

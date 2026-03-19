@@ -73,7 +73,7 @@ impl BridgeError {
         Self::new(
             StatusCode::FORBIDDEN,
             BridgeErrorCode::ForbiddenRemote,
-            "Remote address must be loopback",
+            "Remote address is not allowed by the Bridge network policy",
             Some(detail.into()),
             BridgeErrorSource::Bridge,
             false,

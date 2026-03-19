@@ -1116,6 +1116,8 @@ mod tests {
         BridgeRuntimeConfig {
             listen_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             auth_token: "bridge-test-token".into(),
+            lan_enabled: false,
+            trusted_remote_cidrs: Vec::new(),
             allowed_origins: Vec::new(),
             clawy_base_dir,
             node_id: "node_test".into(),

@@ -3,7 +3,7 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, Request};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use uuid::Uuid;
 
 use super::permissions;
@@ -41,11 +41,7 @@ pub(crate) async fn enforce_request_auth(
         received_at_ms: crate::now_ms(),
     };
 
-    if !context
-        .remote_addr
-        .map(|remote_addr| remote_addr.ip().is_loopback())
-        .unwrap_or(false)
-    {
+    if !remote_addr_is_allowed(context.remote_addr, &state) {
         return ApiError::forbidden_remote(&context).into_response();
     }
 
@@ -129,4 +125,105 @@ fn origin_is_allowed(headers: &HeaderMap, allowlist: &[String]) -> bool {
     allowlist
         .iter()
         .any(|allowed_origin| allowed_origin == origin)
+}
+
+fn remote_addr_is_allowed(remote_addr: Option<SocketAddr>, state: &BridgeAppState) -> bool {
+    let Some(remote_addr) = remote_addr else {
+        return false;
+    };
+    let remote_ip = remote_addr.ip();
+
+    if remote_ip.is_loopback() {
+        return true;
+    }
+
+    if !state.config.lan_enabled || !is_local_network_ip(remote_ip) {
+        return false;
+    }
+
+    if state.config.trusted_remote_cidrs.is_empty() {
+        return true;
+    }
+
+    state
+        .config
+        .trusted_remote_cidrs
+        .iter()
+        .any(|cidr| cidr.contains(&remote_ip))
+}
+
+fn is_local_network_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+        IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::events::BridgeEventEnvelope;
+    use crate::bridge::server::{BridgeAppState, BridgeRuntimeConfig};
+    use ipnet::IpNet;
+    use std::net::SocketAddr;
+    use std::path::PathBuf;
+    use tokio::sync::broadcast;
+
+    fn test_state(lan_enabled: bool, trusted_remote_cidrs: Vec<IpNet>) -> BridgeAppState {
+        let (events_tx, _) = broadcast::channel::<BridgeEventEnvelope>(8);
+        BridgeAppState {
+            app_handle: None,
+            bridge_state: crate::BridgeState::default(),
+            config: BridgeRuntimeConfig {
+                listen_addr: SocketAddr::from(([127, 0, 0, 1], 18790)),
+                auth_token: "bridge-test-token".into(),
+                lan_enabled,
+                trusted_remote_cidrs,
+                allowed_origins: Vec::new(),
+                clawy_base_dir: PathBuf::from("."),
+                node_id: "node_test".into(),
+                openclaw_config_dir: PathBuf::from("."),
+            },
+            events_tx,
+        }
+    }
+
+    #[test]
+    fn local_only_mode_rejects_lan_remote() {
+        let state = test_state(false, Vec::new());
+        assert!(!remote_addr_is_allowed(
+            Some(SocketAddr::from(([192, 168, 1, 25], 43123))),
+            &state
+        ));
+        assert!(remote_addr_is_allowed(
+            Some(SocketAddr::from(([127, 0, 0, 1], 43123))),
+            &state
+        ));
+    }
+
+    #[test]
+    fn lan_mode_accepts_private_remote_and_respects_cidr_scope() {
+        let unrestricted = test_state(true, Vec::new());
+        assert!(remote_addr_is_allowed(
+            Some(SocketAddr::from(([192, 168, 1, 25], 43123))),
+            &unrestricted
+        ));
+        assert!(!remote_addr_is_allowed(
+            Some(SocketAddr::from(([8, 8, 8, 8], 43123))),
+            &unrestricted
+        ));
+
+        let scoped = test_state(
+            true,
+            vec!["192.168.1.0/24".parse().expect("cidr should parse")],
+        );
+        assert!(remote_addr_is_allowed(
+            Some(SocketAddr::from(([192, 168, 1, 25], 43123))),
+            &scoped
+        ));
+        assert!(!remote_addr_is_allowed(
+            Some(SocketAddr::from(([192, 168, 2, 25], 43123))),
+            &scoped
+        ));
+    }
 }

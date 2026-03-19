@@ -211,17 +211,36 @@
   },
   "bridge": {
     "title": "Clawy Bridge",
-    "description": "ForgeAI がこの Clawy ノードへ接続するための API アドレスとトークンを管理します。",
+    "description": "ForgeAI がこの Clawy ノードへ接続するためのアドレス、LAN アクセスポリシー、トークンを管理します。",
     "nodeId": "ノード ID",
+    "accessMode": "アクセスモード",
+    "listenHost": "待ち受けアドレス",
+    "listenHostDesc": "ローカルモードは 127.0.0.1、LAN モードは 0.0.0.0 で待ち受けます。",
     "tokenSource": "トークンの提供元",
     "apiBaseUrl": "Bridge API URL",
+    "publicBaseUrl": "公開 API URL",
+    "publicBaseUrlDesc": "ForgeAI や他の LAN クライアントがこのノードへ接続するときに使う URL です。空欄の場合は現在の待ち受け設定から推定します。",
+    "trustedCidrs": "信頼する LAN IP / CIDR",
+    "trustedCidrsDesc": "任意設定です。空欄ならプライベート LAN 全体を許可し、指定するとその IP や CIDR のみに制限します。",
+    "trustedCidrsPlaceholder": "192.168.1.0/24\n192.168.1.23",
+    "allowedOrigins": "許可するブラウザ Origin",
+    "allowedOriginsDesc": "Origin を検査するのはブラウザ起点のリクエストだけです。ForgeAI Web が Bridge に直接つなぐ場合はここに追加してください。",
+    "allowedOriginsPlaceholder": "http://192.168.1.50:3000\nhttps://forge.example.com",
     "token": "Bridge トークン",
     "tokenDesc": "ForgeAI が現在の Clawy ノードへ接続するときに使う Bearer トークンです。",
     "restartNote": "トークンを再生成すると、新しいトークンをすぐ有効にするため Clawy が自動で再起動します。",
+    "networkRestartNote": "ネットワーク設定を保存すると、新しい待ち受け設定とアクセス制御を適用するため Clawy が自動で再起動します。",
+    "networkRestartHint": "デフォルトではローカル専用です。LAN モードでも Bearer トークンは必須で、ブラウザ経由のリクエストは Origin allowlist に一致する必要があります。",
     "envManaged": "環境変数で管理",
     "localManaged": "ローカル設定で管理",
     "envManagedHelp": "このトークンは環境変数 CLAWY_BRIDGE_TOKEN から提供されているため、UI から再生成できません。",
+    "lanDesc": "ローカルネットワーク上の信頼済みクライアントがこの Clawy ノードへ接続できるようにします。",
+    "localDesc": "このマシンからのアクセスのみ許可します。",
     "unavailable": "利用できません",
+    "modes": {
+      "local": "ローカルのみ",
+      "lan": "LAN 有効"
+    },
     "sources": {
       "env": "環境変数",
       "local": "ローカル"
@@ -234,11 +253,18 @@
       "title": "Bridge トークンを再生成",
       "message": "再生成すると既存クライアントは新しいトークンへ切り替える必要があります。適用のため Clawy は自動で再起動します。"
     },
+    "networkDialog": {
+      "title": "Bridge ネットワーク設定を保存",
+      "message": "保存すると新しい待ち受けアドレス、LAN アクセスポリシー、Origin allowlist を適用するため Clawy が再起動します。"
+    },
     "toast": {
       "tokenCopied": "Bridge トークンをコピーしました",
       "apiCopied": "Bridge API URL をコピーしました",
       "copyFailed": "コピーに失敗しました: {{error}}",
       "loadFailed": "Bridge 情報の読み込みに失敗しました: {{error}}",
+      "networkLoadFailed": "Bridge ネットワーク設定の読み込みに失敗しました: {{error}}",
+      "networkSaved": "Bridge ネットワーク設定を保存しました。Clawy を再起動します。",
+      "networkSaveFailed": "Bridge ネットワーク設定の保存に失敗しました: {{error}}",
       "regenerated": "Bridge トークンを再生成しました。Clawy を再起動します。",
       "regenerateFailed": "Bridge トークンの再生成に失敗しました: {{error}}"
     }

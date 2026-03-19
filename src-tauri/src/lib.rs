@@ -10851,10 +10851,24 @@ fn invoke_ipc(
             serde_json::to_value(bridge::bootstrap::bridge_token_info()?)
                 .map_err(|err| err.to_string())?,
         ),
+        "bridge:getNetworkConfig" => Ok(serde_json::to_value(
+            bridge::bootstrap::bridge_network_config()?,
+        )
+        .map_err(|err| err.to_string())?),
         "bridge:regenerateToken" => Ok(serde_json::to_value(
             bridge::bootstrap::regenerate_bridge_auth_token()?,
         )
         .map_err(|err| err.to_string())?),
+        "bridge:updateNetworkConfig" => {
+            let payload = serde_json::from_value::<bridge::bootstrap::BridgeNetworkConfigUpdate>(
+                args.get(0).cloned().unwrap_or(Value::Null),
+            )
+            .map_err(|err| format!("Invalid Bridge network config payload: {err}"))?;
+            Ok(
+                serde_json::to_value(bridge::bootstrap::update_bridge_network_config(payload)?)
+                    .map_err(|err| err.to_string())?,
+            )
+        }
         "gateway:health" => gateway_health(&state),
         "gateway:autoApprovePairing" => auto_approve_local_device_pairing(),
         "gateway:buildConnectParams" => {
