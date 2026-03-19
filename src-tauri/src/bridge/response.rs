@@ -4,6 +4,7 @@ use axum::Json;
 use serde::Serialize;
 
 use super::auth::RequestContext;
+use super::permissions;
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const API_VERSION_HEADER: &str = "x-clawy-bridge-api-version";
@@ -14,6 +15,8 @@ pub(crate) const BRIDGE_API_VERSION: &str = "v1";
 pub(crate) struct ApiSuccessEnvelope<T> {
     ok: bool,
     data: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permissions: Option<permissions::RequestPermissionSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -171,6 +174,33 @@ impl ApiError {
         )
     }
 
+    pub(crate) fn forbidden_permission(
+        context: &RequestContext,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self::custom(
+            StatusCode::FORBIDDEN,
+            "FORBIDDEN_PERMISSION",
+            "Caller does not have permission for this route",
+            Some(detail.into()),
+            "bridge",
+            false,
+            context,
+        )
+    }
+
+    pub(crate) fn session_not_allowed(context: &RequestContext, detail: impl Into<String>) -> Self {
+        Self::custom(
+            StatusCode::FORBIDDEN,
+            "SESSION_NOT_ALLOWED",
+            "Caller is not allowed to access this session",
+            Some(detail.into()),
+            "bridge",
+            false,
+            context,
+        )
+    }
+
     fn with_www_authenticate(mut self, value: &'static str) -> Self {
         self.www_authenticate = Some(value);
         self
@@ -223,7 +253,15 @@ pub(crate) fn success<T>(status: StatusCode, request_id: &str, data: T) -> Respo
 where
     T: Serialize,
 {
-    let mut response = (status, Json(ApiSuccessEnvelope { ok: true, data })).into_response();
+    let mut response = (
+        status,
+        Json(ApiSuccessEnvelope {
+            ok: true,
+            data,
+            permissions: permissions::current_request_permissions(),
+        }),
+    )
+        .into_response();
 
     attach_request_id(&mut response, request_id);
     response

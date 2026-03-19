@@ -7,6 +7,7 @@ pub(crate) mod errors;
 pub(crate) mod events;
 pub(crate) mod gateway_adapter;
 pub(crate) mod node;
+pub(crate) mod permissions;
 pub(crate) mod registry;
 pub(crate) mod response;
 pub(crate) mod runtime;

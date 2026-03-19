@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
+use super::permissions;
 use super::response::ApiError;
 use super::server::BridgeAppState;
 
@@ -56,9 +57,17 @@ pub(crate) async fn enforce_request_auth(
         return ApiError::unauthorized(&context).into_response();
     }
 
-    request.extensions_mut().insert(context.clone());
+    let permissions = match permissions::authorize_request(&state, &context) {
+        Ok(permissions) => permissions,
+        Err(error) => return error.into_response(),
+    };
 
-    let mut response = next.run(request).await;
+    request.extensions_mut().insert(context.clone());
+    request.extensions_mut().insert(permissions.clone());
+
+    let mut response =
+        permissions::scope_request_permissions(permissions, async move { next.run(request).await })
+            .await;
     super::response::attach_request_id(&mut response, &context.request_id);
     response
 }

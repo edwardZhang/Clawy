@@ -200,6 +200,8 @@ mod tests {
     use reqwest::Client;
     use reqwest::StatusCode;
     use serde_json::Value;
+    use std::fs;
+    use std::path::Path;
     use std::time::Duration;
 
     fn test_config() -> BridgeRuntimeConfig {
@@ -220,8 +222,54 @@ mod tests {
             .expect("test client should build")
     }
 
+    fn test_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "clawy-bridge-server-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(path.join("bridge")).expect("test dir should exist");
+        path
+    }
+
+    fn write_permissions_config(base_dir: &Path) {
+        let config_path = base_dir.join("bridge").join("bridge-permissions.json");
+        fs::write(
+            config_path,
+            serde_json::to_string(&serde_json::json!({
+                "defaultProfile": "read_only",
+                "callerProfiles": {
+                    "readonly-client": "read_only",
+                    "writer-client": "read_write"
+                },
+                "profiles": {
+                    "read_only": {
+                        "read": true,
+                        "write": false,
+                        "allowedSessions": ["agent:main:main"],
+                        "capabilityTags": ["bridge.read", "bridge.session.scoped"]
+                    },
+                    "read_write": {
+                        "read": true,
+                        "write": true,
+                        "allowedSessions": ["agent:main:main"],
+                        "capabilityTags": ["bridge.read", "bridge.write", "bridge.session.scoped"]
+                    }
+                }
+            }))
+            .expect("permissions config should serialize"),
+        )
+        .expect("permissions config should write");
+    }
+
     async fn spawn_test_server() -> BridgeRuntimeHandle {
         let handle = spawn_server(None, crate::BridgeState::default(), test_config())
+            .expect("bridge server should start for tests");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        handle
+    }
+
+    async fn spawn_test_server_with_config(config: BridgeRuntimeConfig) -> BridgeRuntimeHandle {
+        let handle = spawn_server(None, crate::BridgeState::default(), config)
             .expect("bridge server should start for tests");
         tokio::time::sleep(Duration::from_millis(50)).await;
         handle
@@ -268,6 +316,10 @@ mod tests {
         assert_eq!(body["ok"], true);
         assert_eq!(body["data"]["node_id"], "node_test");
         assert_eq!(body["data"]["os"], std::env::consts::OS);
+        assert_eq!(body["permissions"]["profile"], "read_write");
+        assert_eq!(body["permissions"]["read"], true);
+        assert_eq!(body["permissions"]["write"], true);
+        assert!(body["permissions"]["capabilities"].is_array());
     }
 
     #[tokio::test]
@@ -285,5 +337,116 @@ mod tests {
         let body: Value = response.json().await.expect("json body should parse");
         assert_eq!(body["ok"], false);
         assert_eq!(body["error"]["code"], "INVALID_REQUEST");
+    }
+
+    #[tokio::test]
+    async fn read_only_caller_can_read_but_cannot_write() {
+        let clawy_base_dir = test_dir("readonly");
+        write_permissions_config(&clawy_base_dir);
+        let config = BridgeRuntimeConfig {
+            clawy_base_dir,
+            ..test_config()
+        };
+        let handle = spawn_test_server_with_config(config).await;
+
+        let read_response = test_client()
+            .get(format!("http://{}/api/v1/node/info", handle.local_addr))
+            .header("Authorization", "Bearer bridge-test-token")
+            .header("x-clawy-caller-id", "readonly-client")
+            .send()
+            .await
+            .expect("read request should succeed");
+        assert_eq!(read_response.status(), StatusCode::OK);
+
+        let read_body: Value = read_response.json().await.expect("json body should parse");
+        assert_eq!(read_body["permissions"]["profile"], "read_only");
+        assert_eq!(read_body["permissions"]["read"], true);
+        assert_eq!(read_body["permissions"]["write"], false);
+
+        let write_response = test_client()
+            .post(format!(
+                "http://{}/api/v1/sessions/agent:main:main/send",
+                handle.local_addr
+            ))
+            .header("Authorization", "Bearer bridge-test-token")
+            .header("x-clawy-caller-id", "readonly-client")
+            .json(&serde_json::json!({ "message": "hello" }))
+            .send()
+            .await
+            .expect("write request should succeed");
+
+        let write_body: Value = write_response.json().await.expect("json body should parse");
+        assert_eq!(write_body["ok"], false);
+        assert_eq!(write_body["error"]["code"], "FORBIDDEN_PERMISSION");
+    }
+
+    #[tokio::test]
+    async fn write_caller_can_reach_send_and_abort_paths() {
+        let clawy_base_dir = test_dir("writer");
+        write_permissions_config(&clawy_base_dir);
+        let config = BridgeRuntimeConfig {
+            clawy_base_dir,
+            ..test_config()
+        };
+        let handle = spawn_test_server_with_config(config).await;
+
+        let send_response = test_client()
+            .post(format!(
+                "http://{}/api/v1/sessions/agent:main:main/send",
+                handle.local_addr
+            ))
+            .header("Authorization", "Bearer bridge-test-token")
+            .header("x-clawy-caller-id", "writer-client")
+            .json(&serde_json::json!({ "message": "hello" }))
+            .send()
+            .await
+            .expect("send request should succeed");
+        assert_ne!(send_response.status(), StatusCode::FORBIDDEN);
+
+        let send_body: Value = send_response.json().await.expect("json body should parse");
+        assert_ne!(send_body["error"]["code"], "FORBIDDEN_PERMISSION");
+
+        let abort_response = test_client()
+            .post(format!(
+                "http://{}/api/v1/sessions/agent:main:main/abort",
+                handle.local_addr
+            ))
+            .header("Authorization", "Bearer bridge-test-token")
+            .header("x-clawy-caller-id", "writer-client")
+            .send()
+            .await
+            .expect("abort request should succeed");
+        assert_ne!(abort_response.status(), StatusCode::FORBIDDEN);
+
+        let abort_body: Value = abort_response.json().await.expect("json body should parse");
+        assert_ne!(abort_body["error"]["code"], "FORBIDDEN_PERMISSION");
+    }
+
+    #[tokio::test]
+    async fn session_scope_restrictions_return_structured_error() {
+        let clawy_base_dir = test_dir("session-scope");
+        write_permissions_config(&clawy_base_dir);
+        let config = BridgeRuntimeConfig {
+            clawy_base_dir,
+            ..test_config()
+        };
+        let handle = spawn_test_server_with_config(config).await;
+
+        let response = test_client()
+            .get(format!(
+                "http://{}/api/v1/sessions/agent:other:chat/history",
+                handle.local_addr
+            ))
+            .header("Authorization", "Bearer bridge-test-token")
+            .header("x-clawy-caller-id", "readonly-client")
+            .send()
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let body: Value = response.json().await.expect("json body should parse");
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["code"], "SESSION_NOT_ALLOWED");
     }
 }
