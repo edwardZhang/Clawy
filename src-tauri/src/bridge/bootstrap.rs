@@ -40,6 +40,19 @@ struct PersistedBridgeConfig {
     public_base_url: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BridgeTokenInfo {
+    pub(crate) node_id: String,
+    pub(crate) token: String,
+    pub(crate) token_source: String,
+    pub(crate) managed_by_env: bool,
+    pub(crate) config_path: String,
+    pub(crate) base_url: String,
+    pub(crate) api_base_url: String,
+    pub(crate) restart_required: bool,
+}
+
 pub(crate) fn start_bridge_server(
     app_handle: AppHandle,
     bridge_state: crate::BridgeState,
@@ -103,6 +116,26 @@ pub(crate) fn bridge_node_id() -> Result<String, String> {
     Ok(load_or_create_persisted_bridge_config()?.node_id)
 }
 
+pub(crate) fn bridge_token_info() -> Result<BridgeTokenInfo, String> {
+    let config = load_or_create_persisted_bridge_config()?;
+    build_bridge_token_info(&config, false)
+}
+
+pub(crate) fn regenerate_bridge_auth_token() -> Result<BridgeTokenInfo, String> {
+    if bridge_token_override()?.is_some() {
+        return Err(
+            "Clawy Bridge token is managed by CLAWY_BRIDGE_TOKEN and cannot be regenerated from Settings."
+                .into(),
+        );
+    }
+
+    let mut config = load_or_create_persisted_bridge_config()?;
+    config.auth_token = format!("bridge_{}", Uuid::new_v4().simple());
+    crate::write_json(&bridge_config_path(), &config)?;
+    crate::append_log_line("INFO", "Clawy Bridge auth token regenerated from Settings");
+    build_bridge_token_info(&config, BRIDGE_RUNTIME.get().is_some())
+}
+
 fn resolve_listen_addr(settings: &crate::Settings) -> Result<SocketAddr, String> {
     let port = match std::env::var("CLAWY_BRIDGE_PORT") {
         Ok(value) => value
@@ -118,15 +151,9 @@ fn resolve_listen_addr(settings: &crate::Settings) -> Result<SocketAddr, String>
 }
 
 fn resolve_auth_token() -> Result<String, String> {
-    match std::env::var("CLAWY_BRIDGE_TOKEN") {
-        Ok(value) => {
-            let value = value.trim().to_string();
-            if value.is_empty() {
-                return Err("CLAWY_BRIDGE_TOKEN is set but empty".into());
-            }
-            Ok(value)
-        }
-        Err(_) => Ok(load_or_create_persisted_bridge_config()?.auth_token),
+    match bridge_token_override()? {
+        Some(value) => Ok(value),
+        None => Ok(load_or_create_persisted_bridge_config()?.auth_token),
     }
 }
 
@@ -249,10 +276,60 @@ fn load_or_create_persisted_bridge_config() -> Result<PersistedBridgeConfig, Str
     Ok(config)
 }
 
+fn build_bridge_token_info(
+    config: &PersistedBridgeConfig,
+    restart_required: bool,
+) -> Result<BridgeTokenInfo, String> {
+    let managed_by_env;
+    let token_source;
+    let token = match bridge_token_override()? {
+        Some(value) => {
+            managed_by_env = true;
+            token_source = "env";
+            value
+        }
+        None => {
+            managed_by_env = false;
+            token_source = "local";
+            config.auth_token.clone()
+        }
+    };
+
+    let listen_addr = BRIDGE_RUNTIME
+        .get()
+        .map(|runtime| runtime.local_addr)
+        .unwrap_or(resolve_listen_addr(&crate::load_settings())?);
+    let base_url = format!("http://{listen_addr}");
+
+    Ok(BridgeTokenInfo {
+        node_id: config.node_id.clone(),
+        token,
+        token_source: token_source.to_string(),
+        managed_by_env,
+        config_path: bridge_config_path().to_string_lossy().to_string(),
+        api_base_url: format!("{base_url}/api/v1"),
+        base_url,
+        restart_required,
+    })
+}
+
 fn bridge_config_path() -> PathBuf {
     crate::clawy_base_dir()
         .join("bridge")
         .join(BRIDGE_CONFIG_FILE_NAME)
+}
+
+fn bridge_token_override() -> Result<Option<String>, String> {
+    match std::env::var("CLAWY_BRIDGE_TOKEN") {
+        Ok(value) => {
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                return Err("CLAWY_BRIDGE_TOKEN is set but empty".into());
+            }
+            Ok(Some(value))
+        }
+        Err(_) => Ok(None),
+    }
 }
 
 fn parse_allowed_origins(value: &str) -> Vec<String> {

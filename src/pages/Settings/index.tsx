@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
@@ -39,6 +40,17 @@ type ControlUiInfo = {
   url: string;
   token: string;
   port: number;
+};
+
+type BridgeTokenInfo = {
+  nodeId: string;
+  token: string;
+  tokenSource: 'env' | 'local' | string;
+  managedByEnv: boolean;
+  configPath: string;
+  baseUrl: string;
+  apiBaseUrl: string;
+  restartRequired: boolean;
 };
 
 type RuntimeInstallEventPayload = {
@@ -178,6 +190,11 @@ export function Settings() {
   const updateSetAutoDownload = useUpdateStore((state) => state.setAutoDownload);
   const [controlUiInfo, setControlUiInfo] = useState<ControlUiInfo | null>(null);
   const [controlUiInfoLoading, setControlUiInfoLoading] = useState(false);
+  const [bridgeTokenInfo, setBridgeTokenInfo] = useState<BridgeTokenInfo | null>(null);
+  const [bridgeTokenLoading, setBridgeTokenLoading] = useState(false);
+  const [bridgeTokenError, setBridgeTokenError] = useState<string | null>(null);
+  const [bridgeTokenRegenerating, setBridgeTokenRegenerating] = useState(false);
+  const [showBridgeTokenConfirm, setShowBridgeTokenConfirm] = useState(false);
   const [openclawCliCommand, setOpenclawCliCommand] = useState('');
   const [openclawCliError, setOpenclawCliError] = useState<string | null>(null);
   const [openclawCliLoading, setOpenclawCliLoading] = useState(false);
@@ -364,6 +381,23 @@ export function Settings() {
     }
   }, []);
 
+  const refreshBridgeTokenInfo = useCallback(async (showErrorToast = false) => {
+    setBridgeTokenLoading(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('bridge:getTokenInfo') as BridgeTokenInfo;
+      setBridgeTokenInfo(result);
+      setBridgeTokenError(null);
+    } catch (error) {
+      const message = String(error);
+      setBridgeTokenError(message);
+      if (showErrorToast) {
+        toast.error(t('bridge.toast.loadFailed', { error: message }));
+      }
+    } finally {
+      setBridgeTokenLoading(false);
+    }
+  }, [t]);
+
   const loadOpenClawCliCommand = useCallback(async () => {
     if (!showCliTools) return;
     setOpenclawCliLoading(true);
@@ -422,6 +456,46 @@ export function Settings() {
     }
   };
 
+  const handleCopyBridgeToken = async () => {
+    if (!bridgeTokenInfo?.token) return;
+    try {
+      await navigator.clipboard.writeText(bridgeTokenInfo.token);
+      toast.success(t('bridge.toast.tokenCopied'));
+    } catch (error) {
+      toast.error(t('bridge.toast.copyFailed', { error: String(error) }));
+    }
+  };
+
+  const handleCopyBridgeApiUrl = async () => {
+    if (!bridgeTokenInfo?.apiBaseUrl) return;
+    try {
+      await navigator.clipboard.writeText(bridgeTokenInfo.apiBaseUrl);
+      toast.success(t('bridge.toast.apiCopied'));
+    } catch (error) {
+      toast.error(t('bridge.toast.copyFailed', { error: String(error) }));
+    }
+  };
+
+  const handleConfirmBridgeTokenRegeneration = async () => {
+    setBridgeTokenRegenerating(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('bridge:regenerateToken') as BridgeTokenInfo;
+      setBridgeTokenInfo(result);
+      setBridgeTokenError(null);
+      setShowBridgeTokenConfirm(false);
+      toast.success(t('bridge.toast.regenerated'));
+      if (result.restartRequired) {
+        window.setTimeout(() => {
+          void desktopApi.ipcRenderer.invoke('app:relaunch');
+        }, 400);
+      }
+    } catch (error) {
+      toast.error(t('bridge.toast.regenerateFailed', { error: String(error) }));
+    } finally {
+      setBridgeTokenRegenerating(false);
+    }
+  };
+
   useEffect(() => {
     if (!devModeUnlocked) {
       return;
@@ -441,6 +515,22 @@ export function Settings() {
       window.clearTimeout(timeoutId);
     };
   }, [devModeUnlocked, loadOpenClawCliCommand, refreshControlUiInfo]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
+        if (!cancelled) {
+          void refreshBridgeTokenInfo();
+        }
+      });
+    }, 80);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [refreshBridgeTokenInfo]);
 
   const handleCopyCliCommand = async () => {
     if (!openclawCliCommand) return;
@@ -1070,6 +1160,116 @@ export function Settings() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            {t('bridge.title')}
+          </CardTitle>
+          <CardDescription>{t('bridge.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label>{t('bridge.nodeId')}</Label>
+              <p className="text-sm font-medium break-all">
+                {bridgeTokenInfo?.nodeId || t('bridge.unavailable')}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <Label>{t('bridge.tokenSource')}</Label>
+              {bridgeTokenInfo ? (
+                <div className="flex items-center gap-2">
+                  <Badge variant={bridgeTokenInfo.managedByEnv ? 'secondary' : 'success'}>
+                    {bridgeTokenInfo.managedByEnv ? t('bridge.sources.env') : t('bridge.sources.local')}
+                  </Badge>
+                  <p className="text-xs text-muted-foreground">
+                    {bridgeTokenInfo.managedByEnv ? t('bridge.envManaged') : t('bridge.localManaged')}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">{t('bridge.unavailable')}</p>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t('bridge.apiBaseUrl')}</Label>
+            <div className="flex flex-col gap-2 md:flex-row">
+              <Input
+                readOnly
+                value={bridgeTokenInfo?.apiBaseUrl || ''}
+                placeholder={t('bridge.unavailable')}
+                className="font-mono"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => { void refreshBridgeTokenInfo(true); }}
+                disabled={bridgeTokenLoading || bridgeTokenRegenerating}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2${bridgeTokenLoading ? ' animate-spin' : ''}`} />
+                {t('common:actions.refresh')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCopyBridgeApiUrl}
+                disabled={!bridgeTokenInfo?.apiBaseUrl}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                {t('common:actions.copy')}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground break-all">
+              {bridgeTokenInfo?.baseUrl || bridgeTokenInfo?.configPath || t('bridge.unavailable')}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t('bridge.token')}</Label>
+            <p className="text-sm text-muted-foreground">
+              {t('bridge.tokenDesc')}
+            </p>
+            <div className="flex flex-col gap-2 md:flex-row">
+              <Input
+                readOnly
+                value={bridgeTokenInfo?.token || ''}
+                placeholder={t('bridge.unavailable')}
+                className="font-mono"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCopyBridgeToken}
+                disabled={!bridgeTokenInfo?.token}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                {t('common:actions.copy')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowBridgeTokenConfirm(true)}
+                disabled={bridgeTokenLoading || bridgeTokenRegenerating || !bridgeTokenInfo || bridgeTokenInfo.managedByEnv}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2${bridgeTokenRegenerating ? ' animate-spin' : ''}`} />
+                {bridgeTokenRegenerating ? t('bridge.actions.regenerating') : t('bridge.actions.regenerate')}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {bridgeTokenInfo?.managedByEnv ? t('bridge.envManagedHelp') : t('bridge.restartNote')}
+            </p>
+          </div>
+
+          {bridgeTokenError ? (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">
+              {bridgeTokenError}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
       {/* Advanced */}
       <Card>
         <CardHeader>
@@ -1186,6 +1386,20 @@ export function Settings() {
           </CardContent>
         </Card>
       )}
+
+      <ConfirmDialog
+        open={showBridgeTokenConfirm}
+        title={t('bridge.dialog.title')}
+        message={t('bridge.dialog.message')}
+        confirmLabel={t('bridge.actions.regenerate')}
+        cancelLabel={t('common:actions.cancel')}
+        onConfirm={() => { void handleConfirmBridgeTokenRegeneration(); }}
+        onCancel={() => {
+          if (!bridgeTokenRegenerating) {
+            setShowBridgeTokenConfirm(false);
+          }
+        }}
+      />
 
       {/* About */}
       <Card>

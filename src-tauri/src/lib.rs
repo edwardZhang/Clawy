@@ -10847,6 +10847,14 @@ fn invoke_ipc(
                 "token": settings.gateway_token
             }))
         }
+        "bridge:getTokenInfo" => Ok(
+            serde_json::to_value(bridge::bootstrap::bridge_token_info()?)
+                .map_err(|err| err.to_string())?,
+        ),
+        "bridge:regenerateToken" => Ok(serde_json::to_value(
+            bridge::bootstrap::regenerate_bridge_auth_token()?,
+        )
+        .map_err(|err| err.to_string())?),
         "gateway:health" => gateway_health(&state),
         "gateway:autoApprovePairing" => auto_approve_local_device_pairing(),
         "gateway:buildConnectParams" => {

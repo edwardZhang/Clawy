@@ -215,6 +215,40 @@
       "installFailed": "Failed to install the OpenClaw update: {{error}}"
     }
   },
+  "bridge": {
+    "title": "Clawy Bridge",
+    "description": "Manage the API address and token ForgeAI uses to connect to this Clawy node.",
+    "nodeId": "Node ID",
+    "tokenSource": "Token Source",
+    "apiBaseUrl": "Bridge API URL",
+    "token": "Bridge Token",
+    "tokenDesc": "ForgeAI uses this Bearer token when connecting to the current Clawy node.",
+    "restartNote": "Regenerating the token restarts Clawy automatically so the new token takes effect immediately.",
+    "envManaged": "Managed by environment",
+    "localManaged": "Managed locally",
+    "envManagedHelp": "This token comes from the CLAWY_BRIDGE_TOKEN environment variable and cannot be regenerated from the UI.",
+    "unavailable": "Unavailable",
+    "sources": {
+      "env": "Environment",
+      "local": "Local"
+    },
+    "actions": {
+      "regenerate": "Regenerate Token",
+      "regenerating": "Regenerating..."
+    },
+    "dialog": {
+      "title": "Regenerate Bridge Token",
+      "message": "Regenerating the token invalidates existing clients until they use the new token. Clawy will restart automatically to apply it."
+    },
+    "toast": {
+      "tokenCopied": "Bridge token copied",
+      "apiCopied": "Bridge API URL copied",
+      "copyFailed": "Failed to copy: {{error}}",
+      "loadFailed": "Failed to load Bridge info: {{error}}",
+      "regenerated": "Bridge token regenerated. Clawy will restart now.",
+      "regenerateFailed": "Failed to regenerate Bridge token: {{error}}"
+    }
+  },
   "advanced": {
     "title": "Advanced",
     "description": "Power-user options",

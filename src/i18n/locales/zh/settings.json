@@ -215,6 +215,40 @@
       "installFailed": "安装 OpenClaw 更新失败：{{error}}"
     }
   },
+  "bridge": {
+    "title": "Clawy Bridge",
+    "description": "管理 ForgeAI 连接到本机 Clawy 所使用的 API 地址与令牌。",
+    "nodeId": "节点 ID",
+    "tokenSource": "令牌来源",
+    "apiBaseUrl": "Bridge API 地址",
+    "token": "Bridge 令牌",
+    "tokenDesc": "ForgeAI 连接当前 Clawy 节点时使用这个 Bearer token。",
+    "restartNote": "重新生成令牌后，Clawy 会自动重启以让新令牌立即生效。",
+    "envManaged": "环境变量管理",
+    "localManaged": "本地配置管理",
+    "envManagedHelp": "当前令牌由环境变量 CLAWY_BRIDGE_TOKEN 提供，不能在 UI 中重新生成。",
+    "unavailable": "暂不可用",
+    "sources": {
+      "env": "环境变量",
+      "local": "本地生成"
+    },
+    "actions": {
+      "regenerate": "重新生成令牌",
+      "regenerating": "生成中..."
+    },
+    "dialog": {
+      "title": "重新生成 Bridge 令牌",
+      "message": "重新生成后，现有连接需要改用新令牌。Clawy 会自动重启以应用新令牌。"
+    },
+    "toast": {
+      "tokenCopied": "Bridge 令牌已复制",
+      "apiCopied": "Bridge API 地址已复制",
+      "copyFailed": "复制失败：{{error}}",
+      "loadFailed": "加载 Bridge 信息失败：{{error}}",
+      "regenerated": "Bridge 令牌已重新生成，Clawy 即将重启。",
+      "regenerateFailed": "重新生成 Bridge 令牌失败：{{error}}"
+    }
+  },
   "advanced": {
     "title": "高级",
     "description": "高级选项",

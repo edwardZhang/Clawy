@@ -209,6 +209,40 @@
       "installFailed": "OpenClaw 更新のインストールに失敗しました: {{error}}"
     }
   },
+  "bridge": {
+    "title": "Clawy Bridge",
+    "description": "ForgeAI がこの Clawy ノードへ接続するための API アドレスとトークンを管理します。",
+    "nodeId": "ノード ID",
+    "tokenSource": "トークンの提供元",
+    "apiBaseUrl": "Bridge API URL",
+    "token": "Bridge トークン",
+    "tokenDesc": "ForgeAI が現在の Clawy ノードへ接続するときに使う Bearer トークンです。",
+    "restartNote": "トークンを再生成すると、新しいトークンをすぐ有効にするため Clawy が自動で再起動します。",
+    "envManaged": "環境変数で管理",
+    "localManaged": "ローカル設定で管理",
+    "envManagedHelp": "このトークンは環境変数 CLAWY_BRIDGE_TOKEN から提供されているため、UI から再生成できません。",
+    "unavailable": "利用できません",
+    "sources": {
+      "env": "環境変数",
+      "local": "ローカル"
+    },
+    "actions": {
+      "regenerate": "トークンを再生成",
+      "regenerating": "再生成中..."
+    },
+    "dialog": {
+      "title": "Bridge トークンを再生成",
+      "message": "再生成すると既存クライアントは新しいトークンへ切り替える必要があります。適用のため Clawy は自動で再起動します。"
+    },
+    "toast": {
+      "tokenCopied": "Bridge トークンをコピーしました",
+      "apiCopied": "Bridge API URL をコピーしました",
+      "copyFailed": "コピーに失敗しました: {{error}}",
+      "loadFailed": "Bridge 情報の読み込みに失敗しました: {{error}}",
+      "regenerated": "Bridge トークンを再生成しました。Clawy を再起動します。",
+      "regenerateFailed": "Bridge トークンの再生成に失敗しました: {{error}}"
+    }
+  },
   "advanced": {
     "title": "詳細設定",
     "description": "上級ユーザー向けオプション",
