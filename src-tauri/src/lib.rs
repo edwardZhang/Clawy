@@ -23,6 +23,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+mod bridge;
+
 const DEFAULT_GATEWAY_PORT: u16 = 18_789;
 const DEFAULT_GATEWAY_SCOPES: [&str; 1] = ["operator.admin"];
 const VISION_MIME_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/bmp", "image/webp"];
@@ -11846,6 +11848,14 @@ pub fn run() {
             start_gateway_monitor(app.handle().clone(), setup_state.clone());
             start_oauth_monitor(setup_state.clone());
             start_whatsapp_monitor(setup_state.clone());
+            if let Err(error) =
+                bridge::bootstrap::start_bridge_server(app.handle().clone(), setup_state.clone())
+            {
+                append_log_line(
+                    "WARN",
+                    &format!("Failed to start Clawy Bridge server: {error}"),
+                );
+            }
 
             if let Err(error) = create_application_menu(app.handle()) {
                 append_log_line(
