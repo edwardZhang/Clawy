@@ -57,8 +57,7 @@ const OPENCLAW_PACKAGE_NAME: &str = "openclaw";
 const OPENCLAW_NPM_REGISTRY_BASE_URL: &str = "https://registry.npmjs.org";
 const OPENCLAW_RUNTIME_RELEASES_BASE_URL: &str =
     "https://clawy-releases.oss-cn-shenzhen.aliyuncs.com/openclaw";
-const APP_UPDATE_RELEASES_BASE_URL: &str =
-    "https://clawy-releases.oss-cn-shenzhen.aliyuncs.com";
+const APP_UPDATE_RELEASES_BASE_URL: &str = "https://clawy-releases.oss-cn-shenzhen.aliyuncs.com";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2697,6 +2696,42 @@ fn default_openclaw_target_version_for_strategy(
     }
 }
 
+fn resolve_managed_openclaw_install_payload_with<F>(
+    payload: Option<ManagedOpenClawInstallPayload>,
+    mut version_resolver: F,
+) -> Result<ManagedOpenClawInstallPayload, String>
+where
+    F: FnMut(ManagedOpenClawInstallStrategy) -> Result<String, String>,
+{
+    let requested_strategy = payload
+        .as_ref()
+        .map(ManagedOpenClawInstallPayload::requested_strategy)
+        .unwrap_or(ManagedOpenClawInstallStrategy::Official);
+    match payload {
+        Some(payload) if !payload.version.trim().is_empty() => Ok(payload),
+        _ => {
+            let version = version_resolver(requested_strategy)?;
+            let trimmed_version = version.trim();
+            if trimmed_version.is_empty() {
+                return Err("Managed OpenClaw version is required".into());
+            }
+            Ok(ManagedOpenClawInstallPayload {
+                version: trimmed_version.to_string(),
+                strategy: Some(requested_strategy),
+            })
+        }
+    }
+}
+
+fn resolve_managed_openclaw_install_payload(
+    payload: Option<ManagedOpenClawInstallPayload>,
+) -> Result<ManagedOpenClawInstallPayload, String> {
+    resolve_managed_openclaw_install_payload_with(payload, |strategy| {
+        default_openclaw_target_version_for_strategy(strategy)
+            .or_else(|_| recommended_openclaw_version())
+    })
+}
+
 fn resolve_openclaw_runtime_download_artifact<'a>(
     manifest: &'a OpenClawRuntimeReleaseManifest,
 ) -> Result<&'a OpenClawRuntimeDownloadArtifact, String> {
@@ -3490,16 +3525,6 @@ fn install_managed_openclaw_release(
     install_managed_openclaw_release_in_base(&clawy_base_dir(), payload)
 }
 
-#[allow(dead_code)]
-fn install_recommended_managed_openclaw_release() -> Result<ManagedOpenClawInstallResult, String> {
-    let payload = ManagedOpenClawInstallPayload {
-        version: fetch_openclaw_registry_latest_version()
-            .or_else(|_| recommended_openclaw_version())?,
-        strategy: Some(ManagedOpenClawInstallStrategy::Official),
-    };
-    install_managed_openclaw_release(&payload)
-}
-
 fn install_managed_openclaw_release_with_progress(
     app: &AppHandle,
     payload: &ManagedOpenClawInstallPayload,
@@ -3659,17 +3684,6 @@ fn install_managed_openclaw_release_with_progress(
     );
 
     Ok(result)
-}
-
-fn install_recommended_managed_openclaw_release_with_progress(
-    app: &AppHandle,
-) -> Result<ManagedOpenClawInstallResult, String> {
-    let payload = ManagedOpenClawInstallPayload {
-        version: fetch_openclaw_registry_latest_version()
-            .or_else(|_| recommended_openclaw_version())?,
-        strategy: Some(ManagedOpenClawInstallStrategy::Official),
-    };
-    install_managed_openclaw_release_with_progress(app, &payload)
 }
 
 fn switch_managed_node_version_in_base(
@@ -4378,17 +4392,7 @@ fn install_openclaw_update(
     state: &BridgeState,
     payload: Option<ManagedOpenClawInstallPayload>,
 ) -> Result<Value, String> {
-    let requested_strategy = payload
-        .as_ref()
-        .map(ManagedOpenClawInstallPayload::requested_strategy)
-        .unwrap_or(ManagedOpenClawInstallStrategy::Official);
-    let resolved_payload = match payload {
-        Some(payload) if !payload.version.trim().is_empty() => payload,
-        _ => ManagedOpenClawInstallPayload {
-            version: default_openclaw_target_version_for_strategy(requested_strategy)?,
-            strategy: Some(requested_strategy),
-        },
-    };
+    let resolved_payload = resolve_managed_openclaw_install_payload(payload)?;
     let target_version = resolved_payload.version.trim().to_string();
     let strategy = resolved_payload.requested_strategy();
     let active_managed_version =
@@ -11079,16 +11083,9 @@ fn invoke_ipc(
                         .map_err(|err| format!("Invalid managed OpenClaw install payload: {err}"))
                 })
                 .transpose()?;
-            let requested_strategy = payload
-                .as_ref()
-                .map(ManagedOpenClawInstallPayload::requested_strategy)
-                .unwrap_or(ManagedOpenClawInstallStrategy::Official);
-            let version = payload
-                .as_ref()
-                .map(|value| value.version.clone())
-                .filter(|value| !value.trim().is_empty())
-                .or_else(|| default_openclaw_target_version_for_strategy(requested_strategy).ok())
-                .or_else(|| recommended_openclaw_version().ok());
+            let resolved_payload = resolve_managed_openclaw_install_payload(payload)?;
+            let requested_strategy = resolved_payload.requested_strategy();
+            let version = Some(resolved_payload.version.clone());
             if !begin_runtime_install(&state, ManagedRuntimeKind::OpenClaw)? {
                 return Ok(json!({
                     "success": true,
@@ -11100,7 +11097,7 @@ fn invoke_ipc(
                 }));
             }
 
-            let payload_for_task = payload.clone();
+            let payload_for_task = resolved_payload.clone();
             let version_for_task = version.clone();
             spawn_runtime_install_task(
                 &app,
@@ -11109,14 +11106,10 @@ fn invoke_ipc(
                 version_for_task,
                 Some(requested_strategy),
                 move |app_handle, _state_handle| {
-                    if let Some(payload) = payload_for_task {
-                        let _ =
-                            install_managed_openclaw_release_with_progress(&app_handle, &payload)?;
-                    } else {
-                        let _ = install_recommended_managed_openclaw_release_with_progress(
-                            &app_handle,
-                        )?;
-                    }
+                    let _ = install_managed_openclaw_release_with_progress(
+                        &app_handle,
+                        &payload_for_task,
+                    )?;
                     Ok(())
                 },
             );
@@ -13320,6 +13313,68 @@ mod tests {
         assert_eq!(
             sha256_digest_file(&downloaded).expect("downloaded archive sha256"),
             archive_sha256
+        );
+    }
+
+    #[test]
+    fn managed_openclaw_install_payload_resolution_reuses_explicit_version() {
+        let payload = ManagedOpenClawInstallPayload {
+            version: "2026.3.13".into(),
+            strategy: Some(ManagedOpenClawInstallStrategy::Oss),
+        };
+        let mut resolver_called = false;
+
+        let resolved = resolve_managed_openclaw_install_payload_with(Some(payload), |_| {
+            resolver_called = true;
+            Ok("2026.3.8".into())
+        })
+        .expect("resolve payload");
+
+        assert_eq!(resolved.version, "2026.3.13");
+        assert_eq!(
+            resolved.requested_strategy(),
+            ManagedOpenClawInstallStrategy::Oss
+        );
+        assert!(!resolver_called);
+    }
+
+    #[test]
+    fn managed_openclaw_install_payload_resolution_fills_missing_version_from_strategy() {
+        let payload = ManagedOpenClawInstallPayload {
+            version: String::new(),
+            strategy: Some(ManagedOpenClawInstallStrategy::Oss),
+        };
+        let mut requested_strategy = None;
+
+        let resolved = resolve_managed_openclaw_install_payload_with(Some(payload), |strategy| {
+            requested_strategy = Some(strategy);
+            Ok("2026.3.8".into())
+        })
+        .expect("resolve payload");
+
+        assert_eq!(
+            requested_strategy,
+            Some(ManagedOpenClawInstallStrategy::Oss)
+        );
+        assert_eq!(resolved.version, "2026.3.8");
+        assert_eq!(
+            resolved.requested_strategy(),
+            ManagedOpenClawInstallStrategy::Oss
+        );
+    }
+
+    #[test]
+    fn managed_openclaw_install_payload_resolution_defaults_strategy_to_official() {
+        let resolved = resolve_managed_openclaw_install_payload_with(None, |strategy| {
+            assert_eq!(strategy, ManagedOpenClawInstallStrategy::Official);
+            Ok("2026.3.13".into())
+        })
+        .expect("resolve payload");
+
+        assert_eq!(resolved.version, "2026.3.13");
+        assert_eq!(
+            resolved.requested_strategy(),
+            ManagedOpenClawInstallStrategy::Official
         );
     }
 
