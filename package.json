@@ -24,6 +24,7 @@
         "build:tauri": "zx scripts/run-tauri-build.mjs --mode=lite",
         "build:tauri:full": "zx scripts/run-tauri-build.mjs --mode=full --config src-tauri/tauri.full.conf.json",
         "build:vite": "vite build",
+        "bridge:smoke": "node scripts/bridge-smoke-test.mjs",
         "bundle:openclaw-plugins": "zx scripts/bundle-openclaw-plugins.mjs",
         "bundle:clawhub": "zx scripts/bundle-clawhub.mjs",
         "lint": "eslint . --fix",
