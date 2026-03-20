@@ -184,8 +184,8 @@ async fn connect_gateway(
                     let connect_params = crate::gateway_build_connect_params(
                         app_handle,
                         &json!({
-                            "clientId": "bridge-events-client",
-                            "clientMode": "bridge",
+                            "clientId": "gateway-client",
+                            "clientMode": "ui",
                             "nonce": nonce,
                             "role": "operator",
                             "scopes": ["operator.admin"],

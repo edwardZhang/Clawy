@@ -14,8 +14,8 @@ use super::auth::RequestContext;
 use super::response::{self, ApiError};
 use super::server::BridgeAppState;
 
-const BRIDGE_CLIENT_ID: &str = "clawy-bridge";
-const BRIDGE_CLIENT_MODE: &str = "bridge";
+const BRIDGE_CLIENT_ID: &str = "gateway-client";
+const BRIDGE_CLIENT_MODE: &str = "ui";
 const RPC_RETRY_DELAY_MS: u64 = 500;
 const SEND_RPC_TIMEOUT: Duration = Duration::from_secs(120);
 const ABORT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -221,27 +221,15 @@ fn process_abort(
         false,
         ABORT_RPC_TIMEOUT,
     )?;
-    let run_id = extract_run_id(&result).ok_or_else(|| {
-        ApiError::custom(
-            StatusCode::BAD_GATEWAY,
-            "UPSTREAM_PROTOCOL_ERROR",
-            "Gateway response did not satisfy the Bridge contract",
-            Some(
-                "chat.abort succeeded but the Gateway response did not include a non-empty runId."
-                    .into(),
-            ),
-            "gateway",
-            false,
-            &context,
-        )
-    })?;
+    let mut response = serde_json::Map::new();
+    response.insert("accepted".into(), Value::Bool(true));
+    response.insert("session_id".into(), Value::String(session_key));
+    response.insert("aborted".into(), Value::Bool(true));
+    if let Some(run_id) = extract_run_id(&result) {
+        response.insert("run_id".into(), Value::String(run_id));
+    }
 
-    Ok(json!({
-        "accepted": true,
-        "session_id": session_key,
-        "run_id": run_id,
-        "aborted": true,
-    }))
+    Ok(Value::Object(response))
 }
 
 fn invoke_gateway_rpc(
