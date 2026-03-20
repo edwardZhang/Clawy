@@ -780,11 +780,8 @@ function AddChannelDialog({ selectedType, onSelectType, onClose, onChannelAdded 
 
       toast.success(t('toast.channelSaved', { name: meta.name }));
 
-      // Gateway restart is now handled server-side via debouncedRestart()
-      // inside the channel:saveConfig IPC handler, so we don't need to
-      // trigger it explicitly here.  This avoids cascading restarts when
-      // multiple config changes happen in quick succession (e.g. during
-      // the setup wizard).
+      // Gateway restart is handled server-side inside the channel:saveConfig
+      // IPC handler so setup and channel configuration use the same restart path.
       toast.success(t('toast.channelConnecting', { name: meta.name }));
 
       // Brief delay so user can see the success state before dialog closes

@@ -5209,6 +5209,15 @@ fn maybe_restart_gateway(app: &AppHandle, state: &BridgeState) {
     }
 }
 
+fn restart_gateway_if_running(app: &AppHandle, state: &BridgeState) -> Result<Value, String> {
+    let status = gateway_status_snapshot(state)?;
+    if status.state == "stopped" {
+        return Ok(json!({ "success": true, "skipped": true }));
+    }
+
+    gateway_restart_internal(app, state)
+}
+
 fn sync_provider_state_to_openclaw(
     store: &ProviderStore,
     config: &ProviderConfig,
@@ -6280,6 +6289,16 @@ fn install_matrix_bundled_plugin_dependencies() -> Result<(), String> {
     ))
 }
 
+fn maybe_install_matrix_runtime_dependencies() -> Result<bool, String> {
+    let plugin_root = openclaw_runtime_extension_root("matrix")?;
+    if !plugin_root.is_dir() || matrix_runtime_dependencies_installed(&plugin_root) {
+        return Ok(false);
+    }
+
+    install_matrix_bundled_plugin_dependencies()?;
+    Ok(true)
+}
+
 fn apply_matrix_runtime_dependency_status(
     status: &ChannelPluginStatusPayload,
     policy: ChannelPluginPolicy,
@@ -6340,6 +6359,9 @@ fn ensure_openclaw_cli_managed_channel_plugin(
     policy: ChannelPluginPolicy,
 ) -> Result<EnsureChannelPluginResult, String> {
     let mut status = get_openclaw_cli_managed_plugin_status(channel_type, policy.plugin_id)?;
+    if policy.plugin_id == "matrix" && maybe_install_matrix_runtime_dependencies()? {
+        status = get_openclaw_cli_managed_plugin_status(channel_type, policy.plugin_id)?;
+    }
     if is_channel_plugin_ready(&status) {
         return Ok(EnsureChannelPluginResult {
             plugin_ensured: true,
@@ -6353,11 +6375,14 @@ fn ensure_openclaw_cli_managed_channel_plugin(
             .ok_or_else(|| format!("Plugin {} cannot be installed", policy.plugin_id))?;
         install_openclaw_plugin(install_spec)?;
         if policy.plugin_id == "matrix" {
-            install_matrix_bundled_plugin_dependencies()?;
+            let _ = maybe_install_matrix_runtime_dependencies()?;
         }
         "installed"
     } else if status.installed && (status.status.as_deref() == Some("disabled") || !status.enabled)
     {
+        if policy.plugin_id == "matrix" {
+            let _ = maybe_install_matrix_runtime_dependencies()?;
+        }
         enable_openclaw_plugin(policy.plugin_id)?;
         "enabled"
     } else {
@@ -11620,7 +11645,12 @@ fn invoke_ipc(
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default();
-            save_channel_config_value(channel_type, &config)
+            let mut result = save_channel_config_value(channel_type, &config)?;
+            let gateway_restart = restart_gateway_if_running(&app, &state)?;
+            if let Some(object) = result.as_object_mut() {
+                object.insert("gatewayRestart".into(), gateway_restart);
+            }
+            Ok(result)
         }
         "channel:listConfigured" => Ok(json!({
             "success": true,
