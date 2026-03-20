@@ -11,7 +11,7 @@ function parseArgs(argv) {
   const result = {
     channel: 'stable',
     artifact: '',
-    baseUrl: 'https://oss.wymsn.com',
+    baseUrl: 'https://clawy-releases.oss-cn-shenzhen.aliyuncs.com',
     output: path.join(repoRoot, 'release-info.json'),
     merge: '',
     changelog: '',
@@ -71,7 +71,7 @@ function printHelp() {
 Options:
   --channel <stable|beta|dev>   Update channel, default stable
   --artifact <path>             Built artifact path. If omitted, auto-detect current platform artifact
-  --base-url <url>              Public base URL, default https://oss.wymsn.com
+  --base-url <url>              Public base URL, default https://clawy-releases.oss-cn-shenzhen.aliyuncs.com
   --output <path>               Output manifest path, default ./release-info.json
   --merge <path-or-url>         Merge into an existing manifest with the same version
   --changelog <url>             Optional release notes URL

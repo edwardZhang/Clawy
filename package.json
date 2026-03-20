@@ -60,6 +60,7 @@
         "version:minor": "node scripts/bump-app-version.mjs minor",
         "version:major": "node scripts/bump-app-version.mjs major",
         "update:manifest": "node scripts/generate-update-manifest.mjs",
+        "oss:upload": "node scripts/upload-oss-file.mjs",
         "postversion": "git push && git push --tags"
     },
     "dependencies": {

@@ -57,6 +57,8 @@ const OPENCLAW_PACKAGE_NAME: &str = "openclaw";
 const OPENCLAW_NPM_REGISTRY_BASE_URL: &str = "https://registry.npmjs.org";
 const OPENCLAW_RUNTIME_RELEASES_BASE_URL: &str =
     "https://clawy-releases.oss-cn-shenzhen.aliyuncs.com/openclaw";
+const APP_UPDATE_RELEASES_BASE_URL: &str =
+    "https://clawy-releases.oss-cn-shenzhen.aliyuncs.com";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -7864,7 +7866,8 @@ fn update_check_internal(
     })?;
 
     let manifest_url = format!(
-        "https://oss.wymsn.com/{}/release-info.json",
+        "{}/{}/release-info.json",
+        APP_UPDATE_RELEASES_BASE_URL.trim_end_matches('/'),
         update_channel_directory(&channel)
     );
     let client = reqwest_client()?;
