@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "clawy"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "axum",
  "base64 0.22.1",
