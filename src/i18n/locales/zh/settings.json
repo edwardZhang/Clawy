@@ -170,6 +170,44 @@
     "errorDetails": "错误详情：",
     "help": "开启自动更新后，更新将自动下载并安装。"
   },
+  "nodeRuntime": {
+    "title": "Node.js 运行时",
+    "description": "在不改变安装位置的前提下，将 Clawy 托管的 Node.js 运行时暴露给终端使用。",
+    "currentVersion": "当前运行时版本",
+    "source": "运行时来源",
+    "runtimePath": "运行时路径",
+    "globalStatus": "终端可用性",
+    "binDir": "命令目录",
+    "binDirDesc": "启用后，Clawy 会从这个目录暴露 {{commands}}。",
+    "activation": "生效方式",
+    "activationReady": "命令入口已经准备好，新的终端会话可以直接使用。",
+    "activationReadyRestart": "命令入口已经准备好。请重新打开一个终端窗口以加载更新后的 PATH。",
+    "activationPending": "当前这份 Node.js 仅供 Clawy 自己使用。启用后会暴露给当前用户账号下的终端。",
+    "configPath": "Shell 配置文件",
+    "notInstalled": "未安装",
+    "unavailable": "不可用",
+    "methods": {
+      "userPath": "用户 PATH",
+      "shellProfile": "Shell 配置"
+    },
+    "status": {
+      "global": "当前用户全局可用",
+      "localOnly": "仅 Clawy 使用"
+    },
+    "actions": {
+      "enable": "设为全局可用",
+      "enabling": "正在应用...",
+      "reapply": "重新应用全局可用"
+    },
+    "windowsNote": "Windows 会修改当前用户的 PATH。启用后，请重新打开终端窗口再使用 node、npm、npx 和 corepack。",
+    "posixNote": "Clawy 会把 bin 目录写入你的 shell 配置。启用后，请重新打开终端窗口再使用 node、npm、npx 和 corepack。",
+    "toast": {
+      "loadFailed": "加载 Node.js 运行时状态失败：{{error}}",
+      "enabled": "Node.js 命令现在已经可从 {{binDir}} 使用。",
+      "enabledRestart": "Node.js 命令已经准备好并位于 {{binDir}}。请重新打开终端窗口后使用。",
+      "enableFailed": "设置 Node.js 全局可用失败：{{error}}"
+    }
+  },
   "openclawRuntime": {
     "title": "OpenClaw 运行时",
     "description": "独立于 Clawy 外壳查看并更新 OpenClaw 运行时。",

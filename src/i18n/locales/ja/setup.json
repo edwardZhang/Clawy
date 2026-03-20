@@ -44,6 +44,7 @@
         "openclaw": "OpenClaw パッケージ",
         "gateway": "ゲートウェイサービス",
         "installNode": "管理対象 Node.js をインストール",
+        "makeNodeGlobal": "グローバルで使えるようにする",
         "installOpenClaw": "OpenClaw をインストール",
         "startGateway": "ゲートウェイを起動",
         "restartGateway": "ゲートウェイを再起動",
@@ -93,6 +94,10 @@
             "gatewayAutoRestartDetail": "現在の設定を適用して再検証するため、Clawy がゲートウェイを再起動しています。",
             "waitingForDependencies": "先に Node.js と OpenClaw が通過するのを待っています。",
             "nodeMissing": "互換性のある Node.js ランタイムが見つかりません。",
+            "nodeGlobalAvailable": "Clawy は {{binDir}} を通して、この管理対象ランタイムをターミナルでも使えるようにできます。",
+            "nodeGlobalEnabled": "この管理対象ランタイムはすでに {{binDir}} 経由で現在のユーザーに公開されています（{{commands}}）。",
+            "nodeGlobalFailed": "Node.js をグローバル利用可能にできませんでした: {{error}}",
+            "nodeGlobalActionFailed": "Node.js のグローバル利用を有効化できませんでした。",
             "openclawMissing": "互換性のある OpenClaw パッケージが見つかりません。",
             "installingNode": "管理対象 Node.js ランタイムをインストールしています...",
             "installingOpenClaw": "OpenClaw パッケージをインストールしています...",
@@ -119,6 +124,8 @@
         },
         "toast": {
             "nodeInstalled": "管理対象 Node.js {{version}} をインストールしました。",
+            "nodeGlobalEnabled": "{{binDir}} から Node.js コマンドを利用できるようになりました。",
+            "nodeGlobalEnabledRestart": "{{binDir}} に Node.js コマンドを準備しました。新しいターミナルを開いて利用してください。",
             "openclawInstalled": "OpenClaw {{version}} をインストールしました。"
         },
         "logs": {

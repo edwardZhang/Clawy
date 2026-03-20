@@ -387,6 +387,21 @@ interface RuntimeStatusPayload {
   };
 }
 
+interface NodeGlobalStatusPayload {
+  managedNodeAvailable: boolean;
+  managedNodeVersion?: string;
+  enabled: boolean;
+  binDir: string;
+  commandPath: string;
+  exports: string[];
+  scope: string;
+  activationMethod: 'userPath' | 'shellProfile' | string;
+  persistedPathConfigured: boolean;
+  currentProcessPathConfigured: boolean;
+  restartRequired: boolean;
+  configPath?: string;
+}
+
 interface RuntimeInstallResponse {
   success?: boolean;
   error?: string;
@@ -712,6 +727,8 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const [openclawLastFailedInstallStrategy, setOpenclawLastFailedInstallStrategy] = useState<'official' | 'oss' | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [logContent, setLogContent] = useState('');
+  const [nodeGlobalStatus, setNodeGlobalStatus] = useState<NodeGlobalStatusPayload | null>(null);
+  const [nodeGlobalApplying, setNodeGlobalApplying] = useState(false);
   const gatewayTimeoutRef = useRef<number | null>(null);
   const runtimeReady = useMemo(() => runtimePrerequisitesReady(checks), [checks]);
   const allChecksPassed = useMemo(() => runtimeChecksReady(checks), [checks]);
@@ -720,6 +737,29 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     const phase = payload.phase ?? 'installing';
     return t(`runtime.phases.${phase}`, { defaultValue: payload.detail || phase });
   }, [t]);
+
+  const loadNodeGlobalStatus = useCallback(async () => {
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('runtime:getNodeGlobalStatus') as NodeGlobalStatusPayload;
+      setNodeGlobalStatus(result);
+      return result;
+    } catch {
+      const fallback: NodeGlobalStatusPayload = {
+        managedNodeAvailable: false,
+        enabled: false,
+        binDir: '',
+        commandPath: '',
+        exports: ['node', 'npm', 'npx', 'corepack'],
+        scope: 'user',
+        activationMethod: desktopApi.platform === 'win32' ? 'userPath' : 'shellProfile',
+        persistedPathConfigured: false,
+        currentProcessPathConfigured: false,
+        restartRequired: false,
+      };
+      setNodeGlobalStatus(fallback);
+      return fallback;
+    }
+  }, []);
 
   const evaluateGatewayAvailability = useCallback(async (runtimePrereqsReady: boolean) => {
     const currentGateway = useGatewayStore.getState().status;
@@ -828,9 +868,20 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
 
     try {
       const runtimeStatus = await desktopApi.ipcRenderer.invoke('runtime:status') as RuntimeStatusPayload;
+      const nodeGlobal = await loadNodeGlobalStatus();
       const nodeReady = Boolean(runtimeStatus.node.path);
       const openclawReady = Boolean(runtimeStatus.openclaw.dir);
       const nextRuntimeReady = nodeReady && openclawReady;
+      const nodeGlobalDetail = nodeReady && nodeGlobal.managedNodeAvailable
+        ? nodeGlobal.enabled
+          ? t('runtime.status.nodeGlobalEnabled', {
+            commands: nodeGlobal.exports.join(', '),
+            binDir: nodeGlobal.binDir,
+          })
+          : t('runtime.status.nodeGlobalAvailable', {
+            binDir: nodeGlobal.binDir,
+          })
+        : undefined;
 
       dispatchChecks({
         type: 'merge',
@@ -840,6 +891,8 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
             message: nodeReady
               ? `Node.js ready via ${formatRuntimeSource(runtimeStatus.node.source)}${runtimeStatus.node.version ? ` v${runtimeStatus.node.version}` : ''}`
               : firstDiagnosticDetail(runtimeStatus.node.diagnostics) || t('runtime.status.nodeMissing'),
+            detail: nodeGlobalDetail,
+            path: runtimeStatus.node.path || undefined,
           },
           openclaw: {
             status: openclawReady ? 'success' : 'error',
@@ -902,7 +955,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
         },
       });
     }
-  }, [evaluateGatewayAvailability, restartGateway, startGateway, t]);
+  }, [evaluateGatewayAvailability, loadNodeGlobalStatus, restartGateway, startGateway, t]);
 
   useEffect(() => {
     void runChecks();
@@ -1080,6 +1133,34 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
     }
   };
 
+  const handleMakeNodeGlobal = async () => {
+    setNodeGlobalApplying(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('runtime:makeManagedNodeGlobal') as NodeGlobalStatusPayload;
+      setNodeGlobalStatus(result);
+      toast.success(
+        result.restartRequired
+          ? t('runtime.toast.nodeGlobalEnabledRestart', { binDir: result.binDir })
+          : t('runtime.toast.nodeGlobalEnabled', { binDir: result.binDir }),
+      );
+      await runChecks();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(t('runtime.status.nodeGlobalFailed', { error: message }));
+      dispatchChecks({
+        type: 'set',
+        key: 'nodejs',
+        patch: {
+          status: 'error',
+          message: t('runtime.status.nodeGlobalActionFailed'),
+          detail: message,
+        },
+      });
+    } finally {
+      setNodeGlobalApplying(false);
+    }
+  };
+
   const handleInstallOpenClaw = async (strategy: 'official' | 'oss' = 'official') => {
     dispatchChecks({
       type: 'set',
@@ -1177,12 +1258,19 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
   const checkValues = useMemo(() => Object.values(checks.checks), [checks.checks]);
   const hasError = checkValues.some((check) => check.status === 'error');
   const hasChecking = checkValues.some((check) => check.status === 'checking');
+  const canMakeManagedNodeGlobal = checks.checks.nodejs.status === 'success'
+    && Boolean(nodeGlobalStatus?.managedNodeAvailable)
+    && !nodeGlobalStatus?.enabled;
   const nodeActionLabel = checks.checks.nodejs.status === 'error'
     ? t('runtime.installNode')
-    : undefined;
+    : canMakeManagedNodeGlobal
+      ? t('runtime.makeNodeGlobal')
+      : undefined;
   const nodeAction = checks.checks.nodejs.status === 'error'
     ? handleInstallNode
-    : undefined;
+    : canMakeManagedNodeGlobal
+      ? () => void handleMakeNodeGlobal()
+      : undefined;
   const openclawActionLabel = checks.checks.openclaw.status === 'error'
     ? openclawLastFailedInstallStrategy === 'official'
       ? t('runtime.resolveOpenClaw')
@@ -1222,7 +1310,7 @@ function RuntimeContent({ onStatusChange }: RuntimeContentProps) {
           statusLabel={t(`runtime.states.${checks.checks.nodejs.status}`)}
           actionLabel={nodeActionLabel}
           onAction={nodeAction}
-          actionDisabled={checks.checks.nodejs.status === 'checking'}
+          actionDisabled={checks.checks.nodejs.status === 'checking' || nodeGlobalApplying}
         />
         <RuntimeCheckCard
           title={t('runtime.openclaw')}

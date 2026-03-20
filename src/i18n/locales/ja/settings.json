@@ -169,6 +169,44 @@
     "errorDetails": "エラー詳細：",
     "help": "自動アップデートが有効な場合、更新は自動的にダウンロードされインストールされます。"
   },
+  "nodeRuntime": {
+    "title": "Node.js ランタイム",
+    "description": "インストール場所を変えずに、Clawy が管理する Node.js ランタイムをターミナルから使えるようにします。",
+    "currentVersion": "現在のランタイムバージョン",
+    "source": "ランタイムソース",
+    "runtimePath": "ランタイムパス",
+    "globalStatus": "ターミナルでの利用状態",
+    "binDir": "コマンドディレクトリ",
+    "binDirDesc": "有効化すると、Clawy はこのディレクトリから {{commands}} を公開します。",
+    "activation": "有効化方法",
+    "activationReady": "コマンドの入口は準備できています。新しいターミナルセッションから利用できます。",
+    "activationReadyRestart": "コマンドの入口は準備できています。更新された PATH を読み込むため、新しいターミナルを開いてください。",
+    "activationPending": "現在この Node.js は Clawy 内でのみ使われています。有効化すると現在のユーザーのターミナルでも利用できます。",
+    "configPath": "シェル設定ファイル",
+    "notInstalled": "未インストール",
+    "unavailable": "利用不可",
+    "methods": {
+      "userPath": "ユーザー PATH",
+      "shellProfile": "シェル設定"
+    },
+    "status": {
+      "global": "現在のユーザーでグローバル利用可",
+      "localOnly": "Clawy 専用"
+    },
+    "actions": {
+      "enable": "グローバルで使えるようにする",
+      "enabling": "適用中...",
+      "reapply": "グローバル設定を再適用"
+    },
+    "windowsNote": "Windows では現在のユーザー PATH を更新します。有効化後は新しいターミナルを開いて node、npm、npx、corepack を使ってください。",
+    "posixNote": "Clawy は bin ディレクトリをシェル設定へ追加します。有効化後は新しいターミナルを開いて node、npm、npx、corepack を使ってください。",
+    "toast": {
+      "loadFailed": "Node.js ランタイム状態の読み込みに失敗しました: {{error}}",
+      "enabled": "{{binDir}} から Node.js コマンドを利用できるようになりました。",
+      "enabledRestart": "{{binDir}} に Node.js コマンドを準備しました。新しいターミナルを開いて利用してください。",
+      "enableFailed": "Node.js をグローバル利用可能にできませんでした: {{error}}"
+    }
+  },
   "openclawRuntime": {
     "title": "OpenClaw ランタイム",
     "description": "Clawy 本体とは独立して OpenClaw ランタイムを確認・更新します。",

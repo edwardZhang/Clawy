@@ -170,6 +170,44 @@
     "errorDetails": "Error Details:",
     "help": "When auto-update is enabled, updates are downloaded and installed automatically."
   },
+  "nodeRuntime": {
+    "title": "Node.js Runtime",
+    "description": "Expose Clawy's managed Node.js runtime to your terminal without changing where it is installed.",
+    "currentVersion": "Active Runtime Version",
+    "source": "Runtime Source",
+    "runtimePath": "Runtime Path",
+    "globalStatus": "Terminal Availability",
+    "binDir": "Command Bin Directory",
+    "binDirDesc": "Clawy exposes {{commands}} from this directory when you enable terminal access.",
+    "activation": "Activation",
+    "activationReady": "The command shims are ready for future terminal sessions.",
+    "activationReadyRestart": "The command shims are ready. Open a new terminal window to pick up the updated PATH.",
+    "activationPending": "Clawy is currently using this runtime privately. Enable terminal access to expose it for your user account.",
+    "configPath": "Shell config",
+    "notInstalled": "Not installed",
+    "unavailable": "Unavailable",
+    "methods": {
+      "userPath": "User PATH",
+      "shellProfile": "Shell profile"
+    },
+    "status": {
+      "global": "Global for current user",
+      "localOnly": "Clawy only"
+    },
+    "actions": {
+      "enable": "Set as Globally Available",
+      "enabling": "Applying...",
+      "reapply": "Re-apply Global Access"
+    },
+    "windowsNote": "Windows updates the current user's PATH. Open a new terminal window after enabling to use node, npm, npx, and corepack.",
+    "posixNote": "Clawy adds its bin directory to your shell profile. Open a new terminal window after enabling to use node, npm, npx, and corepack.",
+    "toast": {
+      "loadFailed": "Failed to load Node.js runtime status: {{error}}",
+      "enabled": "Node.js commands are now available from {{binDir}}.",
+      "enabledRestart": "Node.js commands are ready in {{binDir}}. Open a new terminal window to use them.",
+      "enableFailed": "Failed to expose Node.js globally: {{error}}"
+    }
+  },
   "openclawRuntime": {
     "title": "OpenClaw Runtime",
     "description": "Inspect and update the OpenClaw runtime independently from the Clawy shell.",

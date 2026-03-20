@@ -81,6 +81,36 @@ type RuntimeInstallEventPayload = {
   };
 };
 
+type RuntimeStatusPayload = {
+  node: {
+    path?: string;
+    source?: 'path' | 'managed' | 'bundled';
+    version?: string;
+    diagnostics?: Array<{ detail?: string }>;
+  };
+  openclaw: {
+    dir?: string;
+    source?: 'managed' | 'nodeModules' | 'bundled';
+    version?: string;
+    diagnostics?: Array<{ detail?: string }>;
+  };
+};
+
+type NodeGlobalStatusPayload = {
+  managedNodeAvailable: boolean;
+  managedNodeVersion?: string;
+  enabled: boolean;
+  binDir: string;
+  commandPath: string;
+  exports: string[];
+  scope: string;
+  activationMethod: 'userPath' | 'shellProfile' | string;
+  persistedPathConfigured: boolean;
+  currentProcessPathConfigured: boolean;
+  restartRequired: boolean;
+  configPath?: string;
+};
+
 type RuntimeInstallResponse = {
   success?: boolean;
   error?: string;
@@ -175,6 +205,19 @@ function splitListInput(value: string): string[] {
     .filter((item) => item.length > 0);
 }
 
+function formatNodeSource(source?: RuntimeStatusPayload['node']['source']): string {
+  switch (source) {
+    case 'managed':
+      return 'Managed runtime';
+    case 'path':
+      return 'System PATH';
+    case 'bundled':
+      return 'Bundled runtime';
+    default:
+      return 'Unknown';
+  }
+}
+
 export function Settings() {
   const { t } = useTranslation('settings');
   const {
@@ -223,6 +266,11 @@ export function Settings() {
   const [bridgeTrustedCidrsDraft, setBridgeTrustedCidrsDraft] = useState('');
   const [bridgeAllowedOriginsDraft, setBridgeAllowedOriginsDraft] = useState('');
   const [bridgePublicBaseUrlDraft, setBridgePublicBaseUrlDraft] = useState('');
+  const [nodeRuntimeStatus, setNodeRuntimeStatus] = useState<RuntimeStatusPayload['node'] | null>(null);
+  const [nodeGlobalStatus, setNodeGlobalStatus] = useState<NodeGlobalStatusPayload | null>(null);
+  const [nodeGlobalLoading, setNodeGlobalLoading] = useState(false);
+  const [nodeGlobalApplying, setNodeGlobalApplying] = useState(false);
+  const [nodeGlobalError, setNodeGlobalError] = useState<string | null>(null);
   const [openclawCliCommand, setOpenclawCliCommand] = useState('');
   const [openclawCliError, setOpenclawCliError] = useState<string | null>(null);
   const [openclawCliLoading, setOpenclawCliLoading] = useState(false);
@@ -443,6 +491,27 @@ export function Settings() {
     }
   }, [t]);
 
+  const refreshNodeGlobalStatus = useCallback(async (showErrorToast = false) => {
+    setNodeGlobalLoading(true);
+    try {
+      const [runtimeStatus, globalStatus] = await Promise.all([
+        desktopApi.ipcRenderer.invoke('runtime:status') as Promise<RuntimeStatusPayload>,
+        desktopApi.ipcRenderer.invoke('runtime:getNodeGlobalStatus') as Promise<NodeGlobalStatusPayload>,
+      ]);
+      setNodeRuntimeStatus(runtimeStatus.node);
+      setNodeGlobalStatus(globalStatus);
+      setNodeGlobalError(null);
+    } catch (error) {
+      const message = String(error);
+      setNodeGlobalError(message);
+      if (showErrorToast) {
+        toast.error(t('nodeRuntime.toast.loadFailed', { error: message }));
+      }
+    } finally {
+      setNodeGlobalLoading(false);
+    }
+  }, [t]);
+
   const loadOpenClawCliCommand = useCallback(async () => {
     if (!showCliTools) return;
     setOpenclawCliLoading(true);
@@ -572,6 +641,27 @@ export function Settings() {
     }
   };
 
+  const handleEnableNodeGlobal = async () => {
+    setNodeGlobalApplying(true);
+    try {
+      const result = await desktopApi.ipcRenderer.invoke('runtime:makeManagedNodeGlobal') as NodeGlobalStatusPayload;
+      setNodeGlobalStatus(result);
+      setNodeGlobalError(null);
+      await refreshNodeGlobalStatus(false);
+      toast.success(
+        result.restartRequired
+          ? t('nodeRuntime.toast.enabledRestart', { binDir: result.binDir })
+          : t('nodeRuntime.toast.enabled', { binDir: result.binDir }),
+      );
+    } catch (error) {
+      const message = String(error);
+      setNodeGlobalError(message);
+      toast.error(t('nodeRuntime.toast.enableFailed', { error: message }));
+    } finally {
+      setNodeGlobalApplying(false);
+    }
+  };
+
   useEffect(() => {
     if (!devModeUnlocked) {
       return;
@@ -597,6 +687,7 @@ export function Settings() {
     const timeoutId = window.setTimeout(() => {
       window.requestAnimationFrame(() => {
         if (!cancelled) {
+          void refreshNodeGlobalStatus();
           void refreshBridgeTokenInfo();
           void refreshBridgeNetworkConfig();
         }
@@ -607,7 +698,7 @@ export function Settings() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [refreshBridgeNetworkConfig, refreshBridgeTokenInfo]);
+  }, [refreshBridgeNetworkConfig, refreshBridgeTokenInfo, refreshNodeGlobalStatus]);
 
   useEffect(() => {
     setBridgeLanEnabledDraft(bridgeNetworkConfig?.lanEnabled ?? false);
@@ -737,6 +828,9 @@ export function Settings() {
       || JSON.stringify(splitListInput(bridgeTrustedCidrsDraft)) !== JSON.stringify(bridgeNetworkConfig.trustedRemoteCidrs)
       || JSON.stringify(splitListInput(bridgeAllowedOriginsDraft)) !== JSON.stringify(bridgeNetworkConfig.allowedOrigins)
   );
+  const nodeRuntimeAvailable = Boolean(nodeRuntimeStatus?.path);
+  const nodeGlobalEnabled = Boolean(nodeGlobalStatus?.enabled);
+  const nodeGlobalCommands = (nodeGlobalStatus?.exports ?? []).join(', ');
 
   useEffect(() => {
     setProxyEnabledDraft(proxyEnabled);
@@ -1111,6 +1205,114 @@ export function Settings() {
               }}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Terminal className="h-5 w-5" />
+            {t('nodeRuntime.title')}
+          </CardTitle>
+          <CardDescription>{t('nodeRuntime.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1">
+              <Label>{t('nodeRuntime.currentVersion')}</Label>
+              <p className="text-sm font-medium">
+                {nodeRuntimeStatus?.version || t('nodeRuntime.notInstalled')}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t('nodeRuntime.source')}: {formatNodeSource(nodeRuntimeStatus?.source)}
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <Label>{t('nodeRuntime.globalStatus')}</Label>
+              <div className="flex items-center gap-2">
+                <Badge variant={nodeGlobalEnabled ? 'success' : 'secondary'}>
+                  {nodeGlobalEnabled ? t('nodeRuntime.status.global') : t('nodeRuntime.status.localOnly')}
+                </Badge>
+                <p className="text-xs text-muted-foreground">
+                  {isWindows ? t('nodeRuntime.methods.userPath') : t('nodeRuntime.methods.shellProfile')}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t('nodeRuntime.runtimePath')}</Label>
+            <Input
+              readOnly
+              value={nodeRuntimeStatus?.path || ''}
+              placeholder={t('nodeRuntime.notInstalled')}
+              className="font-mono"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t('nodeRuntime.binDir')}</Label>
+            <Input
+              readOnly
+              value={nodeGlobalStatus?.binDir || ''}
+              placeholder={t('nodeRuntime.unavailable')}
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              {t('nodeRuntime.binDirDesc', { commands: nodeGlobalCommands || 'node, npm, npx, corepack' })}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>{t('nodeRuntime.activation')}</Label>
+            <p className="text-sm text-muted-foreground">
+              {nodeGlobalEnabled
+                ? nodeGlobalStatus?.restartRequired
+                  ? t('nodeRuntime.activationReadyRestart')
+                  : t('nodeRuntime.activationReady')
+                : t('nodeRuntime.activationPending')}
+            </p>
+            {nodeGlobalStatus?.configPath ? (
+              <p className="text-xs text-muted-foreground break-all">
+                {t('nodeRuntime.configPath')}: {nodeGlobalStatus.configPath}
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-2 md:flex-row">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void refreshNodeGlobalStatus(true)}
+              disabled={nodeGlobalLoading || nodeGlobalApplying}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2${nodeGlobalLoading ? ' animate-spin' : ''}`} />
+              {t('common:actions.refresh')}
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void handleEnableNodeGlobal()}
+              disabled={!nodeRuntimeAvailable || nodeGlobalLoading || nodeGlobalApplying}
+            >
+              <Terminal className="h-4 w-4 mr-2" />
+              {nodeGlobalApplying
+                ? t('nodeRuntime.actions.enabling')
+                : nodeGlobalEnabled
+                  ? t('nodeRuntime.actions.reapply')
+                  : t('nodeRuntime.actions.enable')}
+            </Button>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            {isWindows ? t('nodeRuntime.windowsNote') : t('nodeRuntime.posixNote')}
+          </p>
+
+          {nodeGlobalError ? (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">
+              {nodeGlobalError}
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

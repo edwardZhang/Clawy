@@ -12,6 +12,8 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -59,6 +61,9 @@ const OPENCLAW_RUNTIME_RELEASES_BASE_URL: &str =
     "https://clawy-releases.oss-cn-shenzhen.aliyuncs.com/openclaw";
 const APP_UPDATE_RELEASES_BASE_URL: &str =
     "https://clawy-releases.oss-cn-shenzhen.aliyuncs.com";
+const NODE_GLOBAL_BIN_DIR_NAME: &str = "bin";
+const NODE_GLOBAL_PROFILE_MARKER_START: &str = "# >>> Clawy managed Node.js >>>";
+const NODE_GLOBAL_PROFILE_MARKER_END: &str = "# <<< Clawy managed Node.js <<<";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -513,6 +518,25 @@ struct ManagedNodeInstallResult {
     runtime_dir: PathBuf,
     manifest_path: PathBuf,
     current_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct NodeGlobalStatusPayload {
+    managed_node_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    managed_node_version: Option<String>,
+    enabled: bool,
+    bin_dir: PathBuf,
+    command_path: PathBuf,
+    exports: Vec<String>,
+    scope: String,
+    activation_method: String,
+    persisted_path_configured: bool,
+    current_process_path_configured: bool,
+    restart_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1199,6 +1223,16 @@ fn clawy_base_dir_from_home(home_dir: &Path) -> PathBuf {
 }
 
 #[allow(dead_code)]
+fn clawy_bin_dir_from_base(base_dir: &Path) -> PathBuf {
+    base_dir.join(NODE_GLOBAL_BIN_DIR_NAME)
+}
+
+#[allow(dead_code)]
+fn clawy_bin_dir() -> PathBuf {
+    clawy_bin_dir_from_base(&clawy_base_dir())
+}
+
+#[allow(dead_code)]
 fn openclaw_config_dir_from_home(home_dir: &Path) -> PathBuf {
     home_dir.join(".openclaw")
 }
@@ -1822,6 +1856,298 @@ fn managed_node_binary_path_from_base(base_dir: &Path) -> Option<PathBuf> {
 
 fn managed_node_binary_path() -> Option<PathBuf> {
     managed_node_binary_path_from_base(&clawy_base_dir())
+}
+
+fn managed_node_command_relative_path(command: &str) -> Option<&'static str> {
+    if cfg!(windows) {
+        match command {
+            "node" => Some("node.exe"),
+            "npm" => Some("npm.cmd"),
+            "npx" => Some("npx.cmd"),
+            "corepack" => Some("corepack.cmd"),
+            _ => None,
+        }
+    } else {
+        match command {
+            "node" => Some("bin/node"),
+            "npm" => Some("bin/npm"),
+            "npx" => Some("bin/npx"),
+            "corepack" => Some("bin/corepack"),
+            _ => None,
+        }
+    }
+}
+
+fn managed_node_global_exports() -> [&'static str; 4] {
+    ["node", "npm", "npx", "corepack"]
+}
+
+fn managed_node_global_command_path_from_base(base_dir: &Path, command: &str) -> PathBuf {
+    if cfg!(windows) {
+        clawy_bin_dir_from_base(base_dir).join(format!("{command}.cmd"))
+    } else {
+        clawy_bin_dir_from_base(base_dir).join(command)
+    }
+}
+
+fn preferred_shell_profile_path_from_home(home_dir: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        return home_dir.join(".zprofile");
+    }
+
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let shell_name = Path::new(&shell)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+
+    if shell_name == "zsh" {
+        home_dir.join(".zprofile")
+    } else {
+        home_dir.join(".profile")
+    }
+}
+
+fn current_process_path_contains_dir(target_dir: &Path) -> bool {
+    let Some(path_value) = std::env::var_os("PATH") else {
+        return false;
+    };
+
+    std::env::split_paths(&path_value).any(|entry| {
+        if cfg!(windows) {
+            entry.to_string_lossy().eq_ignore_ascii_case(&target_dir.to_string_lossy())
+        } else {
+            entry == target_dir
+        }
+    })
+}
+
+fn posix_node_global_profile_block(base_dir: &Path) -> String {
+    let bin_dir = clawy_bin_dir_from_base(base_dir);
+    format!(
+        "{NODE_GLOBAL_PROFILE_MARKER_START}\nexport PATH=\"{}:$PATH\"\n{NODE_GLOBAL_PROFILE_MARKER_END}\n",
+        bin_dir.to_string_lossy()
+    )
+}
+
+fn posix_profile_contains_node_global_block(profile_path: &Path, base_dir: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(profile_path) else {
+        return false;
+    };
+    let bin_dir = clawy_bin_dir_from_base(base_dir).to_string_lossy().into_owned();
+    contents.contains(NODE_GLOBAL_PROFILE_MARKER_START)
+        || contents.contains(NODE_GLOBAL_PROFILE_MARKER_END)
+        || contents.contains(&format!("export PATH=\"{bin_dir}:$PATH\""))
+}
+
+fn ensure_posix_profile_exports_node_global_bin(base_dir: &Path) -> Result<PathBuf, String> {
+    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let profile_path = preferred_shell_profile_path_from_home(&home_dir);
+    let block = posix_node_global_profile_block(base_dir);
+
+    if posix_profile_contains_node_global_block(&profile_path, base_dir) {
+        return Ok(profile_path);
+    }
+
+    let mut existing = if profile_path.exists() {
+        fs::read_to_string(&profile_path).map_err(|err| err.to_string())?
+    } else {
+        String::new()
+    };
+
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        existing.push('\n');
+    }
+    existing.push_str(&block);
+    write_text_atomically(&profile_path, &existing)?;
+    Ok(profile_path)
+}
+
+#[cfg(unix)]
+fn write_unix_executable(path: &Path, contents: &str) -> Result<(), String> {
+    write_text_atomically(path, contents)?;
+    let mut permissions = fs::metadata(path)
+        .map_err(|err| err.to_string())?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).map_err(|err| err.to_string())
+}
+
+fn posix_node_global_shim(command: &str) -> Result<String, String> {
+    let Some(target_relative) = managed_node_command_relative_path(command) else {
+        return Err(format!("Unsupported managed Node export command: {command}"));
+    };
+
+    Ok(format!(
+        "#!/bin/sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nCLAWY_HOME=$(CDPATH= cd -- \"$SCRIPT_DIR/..\" && pwd)\nCURRENT_FILE=\"$CLAWY_HOME/runtime/node/current\"\nif [ ! -f \"$CURRENT_FILE\" ]; then\n  echo \"Clawy managed Node.js is not installed.\" >&2\n  exit 1\nfi\nVERSION=$(tr -d '\\r\\n' < \"$CURRENT_FILE\")\nif [ -z \"$VERSION\" ]; then\n  echo \"Clawy managed Node.js version pointer is empty.\" >&2\n  exit 1\nfi\nTARGET=\"$CLAWY_HOME/runtime/node/versions/$VERSION/{target_relative}\"\nif [ ! -e \"$TARGET\" ]; then\n  echo \"Clawy managed Node.js command is missing: $TARGET\" >&2\n  exit 1\nfi\nexec \"$TARGET\" \"$@\"\n"
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_node_global_shim(command: &str) -> Result<String, String> {
+    let Some(target_relative) = managed_node_command_relative_path(command) else {
+        return Err(format!("Unsupported managed Node export command: {command}"));
+    };
+    let target_relative = target_relative.replace('/', "\\");
+    let launcher = if target_relative.ends_with(".cmd") {
+        "call"
+    } else {
+        ""
+    };
+
+    Ok(format!(
+        "@echo off\r\nsetlocal\r\nset \"SCRIPT_DIR=%~dp0\"\r\nfor %%I in (\"%SCRIPT_DIR%..\") do set \"CLAWY_HOME=%%~fI\"\r\nset \"CURRENT_FILE=%CLAWY_HOME%\\runtime\\node\\current\"\r\nif not exist \"%CURRENT_FILE%\" (\r\n  >&2 echo Clawy managed Node.js is not installed.\r\n  exit /b 1\r\n)\r\nset /p CLAWY_NODE_VERSION=<\"%CURRENT_FILE%\"\r\nif \"%CLAWY_NODE_VERSION%\"==\"\" (\r\n  >&2 echo Clawy managed Node.js version pointer is empty.\r\n  exit /b 1\r\n)\r\nset \"TARGET=%CLAWY_HOME%\\runtime\\node\\versions\\%CLAWY_NODE_VERSION%\\{target_relative}\"\r\nif not exist \"%TARGET%\" (\r\n  >&2 echo Clawy managed Node.js command is missing: %TARGET%\r\n  exit /b 1\r\n)\r\n{launcher} \"%TARGET%\" %*\r\n"
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_user_path() -> Result<String, String> {
+    let mut command = Command::new("powershell");
+    command
+        .args([
+            "-NoProfile",
+            "-Command",
+            "[Environment]::GetEnvironmentVariable('Path','User')",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_command_capture(&mut command, "read user PATH")
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_windows_user_path_contains(dir: &Path) -> Result<(), String> {
+    let existing = read_windows_user_path().unwrap_or_default();
+    let target = dir.to_string_lossy().into_owned();
+
+    let already_present = existing
+        .split(';')
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| entry.eq_ignore_ascii_case(&target));
+
+    if already_present {
+        return Ok(());
+    }
+
+    let mut updated_entries = existing
+        .split(';')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    updated_entries.push(target.clone());
+    let updated = updated_entries.join(";");
+
+    let script = format!(
+        "[Environment]::SetEnvironmentVariable('Path', @'\n{updated}\n'@.TrimEnd(\"`r\", \"`n\"), 'User')"
+    );
+    let mut command = Command::new("powershell");
+    command
+        .args(["-NoProfile", "-Command", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_command_capture(&mut command, "write user PATH").map(|_| ())
+}
+
+fn install_managed_node_global_shims_in_base(base_dir: &Path) -> Result<(), String> {
+    if managed_node_binary_path_from_base(base_dir).is_none() {
+        return Err("Managed Node.js is not installed yet.".into());
+    }
+
+    let bin_dir = clawy_bin_dir_from_base(base_dir);
+    ensure_dir(&bin_dir)?;
+
+    for command in managed_node_global_exports() {
+        let command_path = managed_node_global_command_path_from_base(base_dir, command);
+        #[cfg(target_os = "windows")]
+        {
+            let contents = windows_node_global_shim(command)?;
+            write_text_atomically(&command_path, &contents)?;
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let contents = posix_node_global_shim(command)?;
+            write_unix_executable(&command_path, &contents)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn node_global_status_payload_in_base(base_dir: &Path) -> NodeGlobalStatusPayload {
+    let bin_dir = clawy_bin_dir_from_base(base_dir);
+    let command_path = managed_node_global_command_path_from_base(base_dir, "node");
+    let managed_node_version =
+        managed_runtime_current_version_from_base(base_dir, ManagedRuntimeKind::Node);
+    let managed_node_available = managed_node_binary_path_from_base(base_dir).is_some();
+    let current_process_path_configured = current_process_path_contains_dir(&bin_dir);
+
+    #[cfg(target_os = "windows")]
+    let (activation_method, persisted_path_configured, config_path) = {
+        let persisted = read_windows_user_path()
+            .ok()
+            .map(|value| {
+                value
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .any(|entry| entry.eq_ignore_ascii_case(&bin_dir.to_string_lossy()))
+            })
+            .unwrap_or(false);
+        ("userPath".to_string(), persisted, None)
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let (activation_method, persisted_path_configured, config_path) = {
+        let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let profile_path = preferred_shell_profile_path_from_home(&home_dir);
+        let persisted = posix_profile_contains_node_global_block(&profile_path, base_dir);
+        ("shellProfile".to_string(), persisted, Some(profile_path))
+    };
+
+    let enabled = managed_node_available
+        && command_path.exists()
+        && persisted_path_configured;
+
+    NodeGlobalStatusPayload {
+        managed_node_available,
+        managed_node_version,
+        enabled,
+        bin_dir,
+        command_path,
+        exports: managed_node_global_exports()
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        scope: "user".into(),
+        activation_method,
+        persisted_path_configured,
+        current_process_path_configured,
+        restart_required: persisted_path_configured && !current_process_path_configured,
+        config_path,
+    }
+}
+
+fn node_global_status_payload() -> NodeGlobalStatusPayload {
+    node_global_status_payload_in_base(&clawy_base_dir())
+}
+
+fn enable_managed_node_global_commands() -> Result<NodeGlobalStatusPayload, String> {
+    let base_dir = clawy_base_dir();
+    install_managed_node_global_shims_in_base(&base_dir)?;
+
+    #[cfg(target_os = "windows")]
+    ensure_windows_user_path_contains(&clawy_bin_dir_from_base(&base_dir))?;
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = ensure_posix_profile_exports_node_global_bin(&base_dir)?;
+    }
+
+    Ok(node_global_status_payload_in_base(&base_dir))
 }
 
 fn managed_openclaw_dir_from_base(base_dir: &Path) -> Option<PathBuf> {
@@ -11009,6 +11335,13 @@ fn invoke_ipc(
             }
         }
         "runtime:status" => Ok(json!(runtime_status_payload())),
+        "runtime:getNodeGlobalStatus" => Ok(
+            serde_json::to_value(node_global_status_payload()).map_err(|err| err.to_string())?,
+        ),
+        "runtime:makeManagedNodeGlobal" => Ok(
+            serde_json::to_value(enable_managed_node_global_commands()?)
+                .map_err(|err| err.to_string())?,
+        ),
 
         "runtime:installManagedNode" => {
             let payload = serde_json::from_value::<ManagedNodeInstallPayload>(

@@ -44,6 +44,7 @@
         "openclaw": "OpenClaw Package",
         "gateway": "Gateway Service",
         "installNode": "Install Managed Node.js",
+        "makeNodeGlobal": "Set as Globally Available",
         "installOpenClaw": "Install OpenClaw",
         "resolveOpenClaw": "Resolve with OSS",
         "startGateway": "Start Gateway",
@@ -94,6 +95,10 @@
             "gatewayAutoRestartDetail": "Clawy is restarting the Gateway to apply current settings and re-run validation.",
             "waitingForDependencies": "Waiting for Node.js and OpenClaw to pass first.",
             "nodeMissing": "No compatible Node.js runtime is available.",
+            "nodeGlobalAvailable": "Clawy can also expose this managed runtime to your terminal via {{binDir}}.",
+            "nodeGlobalEnabled": "This managed runtime is already exposed for your user account via {{binDir}} ({{commands}}).",
+            "nodeGlobalFailed": "Failed to expose Node.js globally: {{error}}",
+            "nodeGlobalActionFailed": "Node.js global access could not be enabled.",
             "openclawMissing": "No compatible OpenClaw package is available.",
             "installingNode": "Installing managed Node.js runtime...",
             "installingOpenClaw": "Installing OpenClaw package...",
@@ -120,6 +125,8 @@
         },
         "toast": {
             "nodeInstalled": "Managed Node.js {{version}} installed.",
+            "nodeGlobalEnabled": "Node.js commands are now available from {{binDir}}.",
+            "nodeGlobalEnabledRestart": "Node.js commands are ready in {{binDir}}. Open a new terminal window to use them.",
             "openclawInstalled": "OpenClaw {{version}} installed."
         },
         "logs": {
